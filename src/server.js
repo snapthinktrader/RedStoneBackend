@@ -15,7 +15,8 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const referralRoutes = require('./routes/referralRoutes');
-const paymentRoutes = require('./routes/paymentRoutes');
+const paymentRoutes = require('./routes/payment');
+const adminPaymentRoutes = require('./routes/adminPayment');
 const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
@@ -65,6 +66,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/transaction', transactionRoutes);
 app.use('/api/referral', referralRoutes);
 app.use('/api/payment', paymentRoutes);
+app.use('/api/admin/payment', adminPaymentRoutes);
+app.use('/api/admin/settings', require('./routes/adminSettings'));
 app.use('/api/admin', adminRoutes);
 
 // 404 handler

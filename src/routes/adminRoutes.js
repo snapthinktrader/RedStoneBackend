@@ -2,16 +2,15 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const { auth } = require('../middleware/auth');
+const adminAuth = require('../middleware/adminAuth');
 
-// Middleware for admin authentication (simple for now)
-const adminAuth = (req, res, next) => {
-  // For now, we'll skip auth since it's a simple admin panel
-  // In production, implement proper admin authentication
-  next();
-};
+// Apply authentication middleware to all admin routes
+router.use(auth);
+router.use(adminAuth);
 
 // Get all users
-router.get('/users', adminAuth, async (req, res) => {
+router.get('/users', async (req, res) => {
   try {
     const users = await User.find({}, '-password').sort({ createdAt: -1 });
     res.json({
@@ -28,7 +27,7 @@ router.get('/users', adminAuth, async (req, res) => {
 });
 
 // Get user by ID
-router.get('/users/:id', adminAuth, async (req, res) => {
+router.get('/users/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id, '-password');
     if (!user) {
@@ -51,7 +50,7 @@ router.get('/users/:id', adminAuth, async (req, res) => {
 });
 
 // Update user status
-router.patch('/users/:id/status', adminAuth, async (req, res) => {
+router.patch('/users/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     const user = await User.findByIdAndUpdate(
@@ -82,7 +81,7 @@ router.patch('/users/:id/status', adminAuth, async (req, res) => {
 });
 
 // Get all transactions
-router.get('/transactions', adminAuth, async (req, res) => {
+router.get('/transactions', async (req, res) => {
   try {
     const transactions = await Transaction.find({})
       .populate('userId', 'firstName lastName email')
@@ -102,7 +101,7 @@ router.get('/transactions', adminAuth, async (req, res) => {
 });
 
 // Get transaction by ID
-router.get('/transactions/:id', adminAuth, async (req, res) => {
+router.get('/transactions/:id', async (req, res) => {
   try {
     const transaction = await Transaction.findById(req.params.id)
       .populate('userId', 'firstName lastName email');
@@ -128,7 +127,7 @@ router.get('/transactions/:id', adminAuth, async (req, res) => {
 });
 
 // Update transaction status
-router.patch('/transactions/:id/status', adminAuth, async (req, res) => {
+router.patch('/transactions/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     const transaction = await Transaction.findByIdAndUpdate(
@@ -162,7 +161,7 @@ router.patch('/transactions/:id/status', adminAuth, async (req, res) => {
 });
 
 // Get dashboard statistics
-router.get('/stats', adminAuth, async (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
     const [
       totalUsers,
@@ -206,7 +205,7 @@ router.get('/stats', adminAuth, async (req, res) => {
 });
 
 // Get system settings
-router.get('/settings', adminAuth, async (req, res) => {
+router.get('/settings', async (req, res) => {
   try {
     // For now, return default settings
     // In production, store these in database
@@ -258,7 +257,7 @@ router.get('/settings', adminAuth, async (req, res) => {
 });
 
 // Update system settings
-router.put('/settings', adminAuth, async (req, res) => {
+router.put('/settings', async (req, res) => {
   try {
     const { settings } = req.body;
     
