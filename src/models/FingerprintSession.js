@@ -22,6 +22,24 @@ const fingerprintSessionSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  // Device identifiers (optional - may be populated from web or mobile)
+  device_id: {
+    type: String,
+    default: null,
+    index: true
+  },
+  device_name: {
+    type: String,
+    default: null
+  },
+  device_model: {
+    type: String,
+    default: null
+  },
+  device_manufacturer: {
+    type: String,
+    default: null
+  },
   gpu_renderer: {
     type: String,
     default: 'unknown'

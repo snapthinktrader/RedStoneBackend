@@ -9,48 +9,127 @@ const User = require('../models/User');
  */
 function calculateMatchScore(storedFP, incomingFP) {
   let score = 0;
+  const maxScore = 10; // Total points
   
-  // 1. IP Address (3 points) - Strongest signal
+  console.log(`\n  🔍 ENHANCED FINGERPRINT ANALYSIS (fingerprintchat.txt optimized):`);
+  console.log(`     📱 Stored (Web Browser):`);
+  console.log(`        IP: "${storedFP.ip_address}"`);
+  console.log(`        Timezone: "${storedFP.timezone}"`);
+  console.log(`        Language: "${storedFP.language}"`);
+  console.log(`        User Agent: "${storedFP.user_agent?.substring(0, 80)}..."`);
+  console.log(`     📱 Incoming (Mobile App):`);
+  console.log(`        IP: "${incomingFP.ip}"`);
+  console.log(`        Timezone: "${incomingFP.timezone}"`);
+  console.log(`        Language: "${incomingFP.language}"`);
+  console.log(`        Platform: "${incomingFP.platform}"`);
+  console.log(`        User Agent: "${incomingFP.user_agent?.substring(0, 80)}..."`);
+  
+  // PRIORITY 1: Platform/OS Detection (4 points = 40%) - MOST RELIABLE
+  // From fingerprintchat.txt: "This is your most powerful signal"
+  const webIsAndroid = storedFP.user_agent?.toLowerCase().includes('android') || false;
+  const appIsAndroid = incomingFP.user_agent?.toLowerCase().includes('android') || 
+                       incomingFP.platform?.toLowerCase().includes('android') || false;
+  
+  if (webIsAndroid && appIsAndroid) {
+    score += 4;
+    console.log(`     ✅ PLATFORM: Both Android detected (40 points) - STRONG MATCH`);
+  } else {
+    console.log(`     ❌ PLATFORM: Mismatch - Web:${webIsAndroid ? 'Android' : 'Non-Android'}, App:${appIsAndroid ? 'Android' : 'Non-Android'}`);
+  }
+  
+  // PRIORITY 2: Timezone (3 points = 30%) - Very Stable
+  // From fingerprintchat.txt: "Extremely stable. Rarely changes unless they travel"
+  if (storedFP.timezone && incomingFP.timezone) {
+    const normalizedStored = normalizeTimezone(storedFP.timezone);
+    const normalizedIncoming = normalizeTimezone(incomingFP.timezone);
+    
+    if (normalizedStored === normalizedIncoming) {
+      score += 3;
+      console.log(`     ✅ TIMEZONE: Perfect match (30 points) - "${normalizedStored}"`);
+    } else {
+      console.log(`     ❌ TIMEZONE: Different - Web:"${normalizedStored}" vs App:"${normalizedIncoming}"`);
+    }
+  } else {
+    console.log(`     ⚠️ TIMEZONE: Missing data - Web:"${storedFP.timezone}" vs App:"${incomingFP.timezone}"`);
+  }
+  
+  // PRIORITY 3: Language Primary Code (2 points = 20%) - Stable  
+  // From fingerprintchat.txt: "Compare the primary language subtag (the 'en' part)"
+  if (storedFP.language && incomingFP.language) {
+    // Extract primary language code: en-US → en, en_IN → en
+    const webLangCode = storedFP.language.split('-')[0].split('_')[0].toLowerCase();
+    const appLangCode = incomingFP.language.split('-')[0].split('_')[0].toLowerCase();
+    
+    if (webLangCode === appLangCode) {
+      score += 2;
+      console.log(`     ✅ LANGUAGE: Primary code match (20 points) - "${webLangCode}" (Web:${storedFP.language}, App:${incomingFP.language})`);
+    } else {
+      console.log(`     ❌ LANGUAGE: Different primary codes - Web:"${webLangCode}" vs App:"${appLangCode}"`);
+    }
+  } else {
+    console.log(`     ⚠️ LANGUAGE: Missing data - Web:"${storedFP.language}" vs App:"${incomingFP.language}"`);
+  }
+  
+  // LOW-PRIORITY BONUS: IP Address (1 point = 10%) - Unreliable
+  // From fingerprintchat.txt: "Only use it to add a small bonus... A mismatch should not cause failure"
   if (storedFP.ip_address === incomingFP.ip) {
-    score += 3;
-  }
-  
-  // 2. GPU Renderer (5 points) - Very strong signal
-  if (storedFP.gpu_renderer && incomingFP.gpu) {
-    if (storedFP.gpu_renderer === incomingFP.gpu) {
-      score += 5;
-    } else if (fuzzyMatch(storedFP.gpu_renderer, incomingFP.gpu)) {
-      score += 3; // Partial credit for fuzzy match
-    }
-  }
-  
-  // 3. Screen Resolution (2 points)
-  if (storedFP.screen_resolution && incomingFP.resolution) {
-    if (storedFP.screen_resolution === incomingFP.resolution) {
-      score += 2;
-    } else if (sameAspectRatio(storedFP.screen_resolution, incomingFP.resolution)) {
-      score += 1; // Partial credit for same aspect ratio
-    }
-  }
-  
-  // 4. User Agent / Device similarity (2 points)
-  if (storedFP.user_agent && incomingFP.user_agent) {
-    if (fuzzyMatch(storedFP.user_agent, incomingFP.user_agent)) {
-      score += 2;
-    }
-  }
-  
-  // 5. Timezone (1 point)
-  if (storedFP.timezone && incomingFP.timezone && storedFP.timezone === incomingFP.timezone) {
     score += 1;
+    console.log(`     ⚡ IP BONUS: Exact match (10 points) - "${incomingFP.ip}"`);
+  } else if (sameIPSubnet(storedFP.ip_address, incomingFP.ip)) {
+    score += 0.5;
+    console.log(`     ⚡ IP BONUS: Same subnet (5 points) - ${storedFP.ip_address} ↔ ${incomingFP.ip}`);
+  } else {
+    console.log(`     ❌ IP: Different networks - "${storedFP.ip_address}" vs "${incomingFP.ip}" (no bonus)`);
   }
   
-  // 6. Language (1 point)
-  if (storedFP.language && incomingFP.language && storedFP.language === incomingFP.language) {
-    score += 1;
-  }
+  // EXPLICITLY IGNORED (per fingerprintchat.txt):
+  // ❌ GPU Renderer: "Browser and native app report this differently"
+  // ❌ Screen Resolution: "Browser viewport ≠ mobile screen" 
+  // ❌ Full User Agent: "Completely different formats"
   
-  return score;
+  const percentage = Math.round((score / maxScore) * 100);
+  const normalizedScore = (score / maxScore) * 15;
+  
+  console.log(`  📊 ENHANCED SCORE: ${score.toFixed(1)}/${maxScore} = ${percentage}% confidence`);
+  console.log(`     🎯 Breakdown: Platform(40%) + Timezone(30%) + Language(20%) + IP Bonus(10%)`);
+  console.log(`     📈 Normalized: ${normalizedScore.toFixed(1)}/15 (Threshold: 4.35/15 = 29%)`);
+  console.log(`     ${normalizedScore >= 4.35 ? '✅ ABOVE THRESHOLD - MATCH!' : '❌ Below threshold - No match'}`);
+  
+  return normalizedScore;
+}
+
+/**
+ * Check if two IPs are in the same subnet (for mobile network switching)
+ */
+function sameIPSubnet(ip1, ip2) {
+  if (!ip1 || !ip2) return false;
+  
+  // Check if first 3 octets match (Class C subnet)
+  const octets1 = ip1.split('.');
+  const octets2 = ip2.split('.');
+  
+  if (octets1.length !== 4 || octets2.length !== 4) return false;
+  
+  return octets1[0] === octets2[0] && 
+         octets1[1] === octets2[1] && 
+         octets1[2] === octets2[2];
+}
+
+/**
+ * Normalize timezone names (handle aliases)
+ * Asia/Calcutta = Asia/Kolkata (same timezone, different names)
+ */
+function normalizeTimezone(tz) {
+  if (!tz) return '';
+  
+  const timezoneAliases = {
+    'Asia/Calcutta': 'Asia/Kolkata',
+    'Asia/Kathmandu': 'Asia/Katmandu',
+    'America/Montreal': 'America/Toronto',
+    // Add more aliases as needed
+  };
+  
+  return timezoneAliases[tz] || tz;
 }
 
 /**
@@ -135,6 +214,10 @@ router.post('/log-fingerprint', async (req, res) => {
       referrer_id: referrer._id,
       referrer_name: referrerFullName,
       ip_address: fingerprint.ip || 'unknown',
+      device_id: fingerprint.device_id || null,
+      device_name: fingerprint.device_name || null,
+      device_model: fingerprint.device_model || null,
+      device_manufacturer: fingerprint.device_manufacturer || null,
       gpu_renderer: fingerprint.gpu || 'unknown',
       screen_resolution: fingerprint.resolution || 'unknown',
       user_agent: fingerprint.user_agent || req.headers['user-agent'] || 'unknown',
@@ -226,6 +309,10 @@ router.post('/log-download', async (req, res) => {
       referrer_id: referrer._id,
       referrer_name: referrerFullName,
       ip_address: fingerprint.ip || 'unknown',
+      device_id: fingerprint.device_id || null,
+      device_name: fingerprint.device_name || null,
+      device_model: fingerprint.device_model || null,
+      device_manufacturer: fingerprint.device_manufacturer || null,
       gpu_renderer: fingerprint.gpu || 'unknown',
       screen_resolution: fingerprint.resolution || 'unknown',
       user_agent: fingerprint.user_agent || 'unknown',
@@ -301,13 +388,16 @@ router.post('/find-match', async (req, res) => {
     }
     
     console.log(`🔍 Matching against ${candidates.length} candidate(s)...`);
-    console.log('📱 Incoming fingerprint:', {
+    console.log('📱 INCOMING FINGERPRINT (from mobile app):');
+    console.log('   Raw fingerprint object:', JSON.stringify(fingerprint, null, 2));
+    console.log('   Parsed data:', {
       ip: fingerprint.ip,
       gpu: fingerprint.gpu,
       resolution: fingerprint.resolution,
-      user_agent: fingerprint.user_agent?.substring(0, 50),
+      user_agent: fingerprint.user_agent?.substring(0, 100),
       timezone: fingerprint.timezone,
-      language: fingerprint.language
+      language: fingerprint.language,
+      platform: fingerprint.platform
     });
     
     // Score each candidate
@@ -316,19 +406,45 @@ router.post('/find-match', async (req, res) => {
     
     for (const candidate of candidates) {
       console.log(`\n📊 Comparing with candidate ${candidate._id}:`);
-      console.log('   Stored:', {
-        ip: candidate.ip_address,
-        gpu: candidate.gpu_renderer,
-        resolution: candidate.screen_resolution,
-        user_agent: candidate.user_agent?.substring(0, 50),
-        timezone: candidate.timezone,
-        language: candidate.language
-      });
+      console.log('   🌐 STORED FINGERPRINT (from web browser):');
+      console.log('      ip_address:', candidate.ip_address);
+      console.log('      gpu_renderer:', candidate.gpu_renderer);
+      console.log('      screen_resolution:', candidate.screen_resolution);
+      console.log('      user_agent:', candidate.user_agent?.substring(0, 100));
+      console.log('      timezone:', candidate.timezone);
+      console.log('      language:', candidate.language);
+      console.log('      status:', candidate.status);
+      console.log('      created_at:', candidate.created_at);
       
+      // SHORT-CIRCUIT MATCHES (Exact identity signals)
+      // 1) device_id exact match (mobile->web)
+      if (fingerprint.device_id && candidate.device_id && fingerprint.device_id === candidate.device_id) {
+        console.log('   🔒 DEVICE ID EXACT MATCH - short-circuiting with 100% confidence');
+        bestMatch = candidate;
+        highestScore = 15; // full points
+        break;
+      }
+
+      // 2) device_name or model exact match (strong signal)
+      if (fingerprint.device_name && candidate.device_name && fingerprint.device_name === candidate.device_name) {
+        console.log('   🔒 DEVICE NAME EXACT MATCH - short-circuiting with 100% confidence');
+        bestMatch = candidate;
+        highestScore = 15;
+        break;
+      }
+
+      // 3) exact IP address match (strong enough to accept)
+      if (candidate.ip_address && fingerprint.ip && candidate.ip_address === fingerprint.ip) {
+        console.log('   🔒 IP EXACT MATCH - short-circuiting with 100% confidence');
+        bestMatch = candidate;
+        highestScore = 15;
+        break;
+      }
+
+      // Otherwise fall back to scoring
       const score = calculateMatchScore(candidate, fingerprint);
-      
       console.log(`  ➡️ Score: ${score}/15 points (${((score/15)*100).toFixed(0)}%)`);
-      
+
       if (score > highestScore) {
         highestScore = score;
         bestMatch = candidate;
@@ -337,7 +453,7 @@ router.post('/find-match', async (req, res) => {
     
     // Calculate confidence (0-1)
     const confidence = highestScore / 15;
-    const CONFIDENCE_THRESHOLD = 0.6; // 60% = 9/15 points
+    const CONFIDENCE_THRESHOLD = 0.29; // 29% = 4.35/15 points
     
     if (confidence >= CONFIDENCE_THRESHOLD && bestMatch) {
       // Update match confidence in the session
@@ -360,7 +476,7 @@ router.post('/find-match', async (req, res) => {
         session_id: bestMatch._id
       });
     } else {
-      console.log(`⚠️ No confident match (best: ${(confidence * 100).toFixed(0)}%, threshold: 60%)`);
+      console.log(`⚠️ No confident match (best: ${(confidence * 100).toFixed(0)}%, threshold: 29%)`);
       
       res.json({
         match_found: false,
