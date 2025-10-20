@@ -51,8 +51,13 @@ app.use(cors({
     process.env.FRONTEND_URL || 'http://localhost:3001',
     'http://localhost:8080', // Flutter web dev server
     'http://localhost:3000', // Alternative frontend port
+    'https://redstoneadmin.vercel.app', // Admin panel
+    'https://redstoneadmin.vercel.app/', // Admin panel with trailing slash
+    '*', // Allow all origins for development - remove in production
   ],
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 app.use(limiter);
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
