@@ -11,9 +11,22 @@ const AdminSettings = require('../models/AdminSettings');
  */
 class FundSweepService {
     constructor() {
-        this.ownerWallet = 'TDiFVNet9uxWu5ckvJCVHpc1qd5LMvbHNu'; // Default, will be updated from DB
-        this.tronApiUrl = 'https://api.trongrid.io';
-        this.usdtContract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+        // Check if we're in testnet mode
+        this.isTestnet = process.env.TRON_NETWORK === 'testnet' || process.env.NODE_ENV === 'test';
+        
+        // Testnet vs Mainnet configuration
+        if (this.isTestnet) {
+            this.ownerWallet = process.env.TESTNET_OWNER_WALLET || 'TMii1VrgBeiERbFsEqkq5FZexazYz1hnjy';
+            this.tronApiUrl = 'https://api.shasta.trongrid.io'; // Shasta testnet
+            this.usdtContract = 'TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs'; // Testnet USDT contract
+            console.log('🧪 FundSweepService initialized in TESTNET mode');
+        } else {
+            this.ownerWallet = 'TDiFVNet9uxWu5ckvJCVHpc1qd5LMvbHNu'; // Default, will be updated from DB
+            this.tronApiUrl = 'https://api.trongrid.io';
+            this.usdtContract = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+            console.log('🚀 FundSweepService initialized in MAINNET mode');
+        }
+        
         this.initialized = false;
     }
 
@@ -216,7 +229,7 @@ class FundSweepService {
             // Initialize TronWeb with the private key for this deposit
             const TronWeb = require('tronweb');
             const tronWeb = new TronWeb({
-                fullHost: 'https://api.trongrid.io',
+                fullHost: this.tronApiUrl, // Uses testnet or mainnet based on configuration
                 privateKey: deposit.privateKeySeed
             });
             
@@ -406,8 +419,267 @@ class FundSweepService {
     }
 
     /**
-     * Get TRX balance for gas fees
+     * Enhanced USDT Auto-Sweep with HD Wallet Integration
+     * Automatically detects USDT deposits and performs two-step sweep process
      */
+    async performAutomatedUSDTSweep() {
+        console.log('🔄 STARTING AUTOMATED USDT SWEEP PROCESS');
+        console.log('========================================');
+        
+        try {
+            // Get all pending deposits that might have received USDT
+            const pendingDeposits = await Deposit.find({
+                status: { $in: ['PENDING', 'PARTIAL'] },
+                network: 'tron',
+                currency: 'USDT'
+            }).populate('userId', 'email username');
+            
+            console.log(`📋 Found ${pendingDeposits.length} pending USDT deposits to check`);
+            
+            const sweepResults = [];
+            
+            for (const deposit of pendingDeposits) {
+                try {
+                    console.log(`\n🔍 Checking deposit ${deposit._id}:`);
+                    console.log(`   Wallet: ${deposit.walletAddress}`);
+                    console.log(`   Expected: ${deposit.amount} USDT`);
+                    console.log(`   User: ${deposit.userId?.email || 'Unknown'}`);
+                    
+                    // Step 1: Check USDT balance
+                    const usdtBalance = await this.getUSDTBalance(deposit.walletAddress);
+                    console.log(`   Current USDT: ${usdtBalance} USDT`);
+                    
+                    if (usdtBalance <= 0) {
+                        console.log(`   ⏭️  No USDT found, skipping...`);
+                        continue;
+                    }
+                    
+                    // Step 2: Check TRX balance for gas fees
+                    const trxBalance = await this.getTRXBalance(deposit.walletAddress);
+                    console.log(`   Current TRX: ${trxBalance} TRX`);
+                    
+                    let gasFeeSent = false;
+                    
+                    // Step 3: Send TRX for gas if needed
+                    if (trxBalance < 15) { // Need at least 15 TRX for safe USDT transfer
+                        console.log(`   📤 Sending TRX for gas fees...`);
+                        
+                        const gasResult = await this.sendGasFees(deposit.walletAddress);
+                        if (!gasResult.success) {
+                            console.log(`   ❌ Failed to send gas fees: ${gasResult.error}`);
+                            sweepResults.push({
+                                depositId: deposit._id,
+                                walletAddress: deposit.walletAddress,
+                                success: false,
+                                step: 'gas_fees',
+                                error: gasResult.error,
+                                usdtBalance
+                            });
+                            continue;
+                        }
+                        
+                        console.log(`   ✅ Gas fees sent: ${gasResult.txHash}`);
+                        gasFeeSent = true;
+                        
+                        // Wait for TRX to confirm before attempting USDT sweep
+                        console.log(`   ⏳ Waiting 10 seconds for TRX confirmation...`);
+                        await new Promise(resolve => setTimeout(resolve, 10000));
+                    }
+                    
+                    // Step 4: Sweep USDT to main wallet
+                    console.log(`   🔄 Sweeping ${usdtBalance} USDT...`);
+                    
+                    const sweepResult = await this.sweepUSDTFromHDWallet(deposit, usdtBalance);
+                    
+                    if (sweepResult.success) {
+                        console.log(`   🎉 Successfully swept ${usdtBalance} USDT!`);
+                        console.log(`   📋 Transaction: ${sweepResult.transactionHash}`);
+                        
+                        // Update deposit status
+                        deposit.status = 'CONFIRMED';
+                        deposit.actualAmount = usdtBalance;
+                        deposit.sweepTransactionHash = sweepResult.transactionHash;
+                        deposit.processedAt = new Date();
+                        deposit.gasFeeTxHash = gasFeeSent ? gasResult.txHash : null;
+                        await deposit.save();
+                        
+                        // Credit user balance
+                        if (deposit.userId) {
+                            const user = await User.findById(deposit.userId);
+                            if (user) {
+                                user.walletBalance += usdtBalance;
+                                await user.save();
+                                console.log(`   💰 Credited user ${user.email} with $${usdtBalance}`);
+                            }
+                        }
+                        
+                        sweepResults.push({
+                            depositId: deposit._id,
+                            walletAddress: deposit.walletAddress,
+                            success: true,
+                            usdtSwept: usdtBalance,
+                            txHash: sweepResult.transactionHash,
+                            gasFeeSent,
+                            gasFeeTxHash: gasFeeSent ? gasResult.txHash : null
+                        });
+                        
+                    } else {
+                        console.log(`   ❌ USDT sweep failed: ${sweepResult.error}`);
+                        sweepResults.push({
+                            depositId: deposit._id,
+                            walletAddress: deposit.walletAddress,
+                            success: false,
+                            step: 'usdt_sweep',
+                            error: sweepResult.error,
+                            usdtBalance,
+                            gasFeeSent
+                        });
+                    }
+                    
+                } catch (error) {
+                    console.error(`   ❌ Error processing deposit ${deposit._id}:`, error.message);
+                    sweepResults.push({
+                        depositId: deposit._id,
+                        walletAddress: deposit.walletAddress,
+                        success: false,
+                        step: 'processing',
+                        error: error.message
+                    });
+                }
+            }
+            
+            // Summary report
+            console.log('\n📊 AUTOMATED SWEEP SUMMARY:');
+            console.log('============================');
+            const successful = sweepResults.filter(r => r.success);
+            const failed = sweepResults.filter(r => !r.success);
+            
+            console.log(`✅ Successful sweeps: ${successful.length}`);
+            console.log(`❌ Failed sweeps: ${failed.length}`);
+            
+            if (successful.length > 0) {
+                const totalSwept = successful.reduce((sum, r) => sum + (r.usdtSwept || 0), 0);
+                console.log(`💰 Total USDT swept: ${totalSwept} USDT`);
+                console.log('📋 Successful transactions:');
+                successful.forEach(r => {
+                    console.log(`   ${r.walletAddress}: ${r.usdtSwept} USDT (${r.txHash})`);
+                });
+            }
+            
+            if (failed.length > 0) {
+                console.log('❌ Failed transactions:');
+                failed.forEach(r => {
+                    console.log(`   ${r.walletAddress}: ${r.error} (step: ${r.step})`);
+                });
+            }
+            
+            return {
+                success: true,
+                processed: sweepResults.length,
+                successful: successful.length,
+                failed: failed.length,
+                totalSwept: successful.reduce((sum, r) => sum + (r.usdtSwept || 0), 0),
+                results: sweepResults
+            };
+            
+        } catch (error) {
+            console.error('❌ Automated USDT sweep failed:', error);
+            return {
+                success: false,
+                error: error.message,
+                results: []
+            };
+        }
+    }
+
+    /**
+     * Sweep USDT from HD Wallet with enhanced error handling
+     */
+    async sweepUSDTFromHDWallet(deposit, amount) {
+        try {
+            console.log(`🔄 Sweeping ${amount} USDT from HD wallet ${deposit.walletAddress}`);
+            
+            // Initialize TronWeb with the HD wallet's regenerated private key
+            const TronWeb = require('tronweb');
+            const tronWeb = new TronWeb({
+                fullHost: this.tronApiUrl,
+                privateKey: deposit.privateKeySeed
+            });
+            
+            // Validate addresses
+            if (!tronWeb.isAddress(deposit.walletAddress)) {
+                throw new Error('Invalid HD wallet address');
+            }
+            if (!tronWeb.isAddress(this.ownerWallet)) {
+                throw new Error('Invalid owner wallet address');
+            }
+            
+            // Get USDT contract instance
+            const usdtContract = await tronWeb.contract().at(this.usdtContract);
+            
+            // Convert amount to contract units (USDT has 6 decimals)
+            const amountUnits = Math.floor(amount * 1000000);
+            
+            // Verify balance before transfer
+            const balance = await usdtContract.balanceOf(deposit.walletAddress).call();
+            const balanceUsdt = parseInt(balance.toString()) / 1000000;
+            
+            if (balanceUsdt < amount) {
+                throw new Error(`Insufficient USDT balance: has ${balanceUsdt}, needs ${amount}`);
+            }
+            
+            console.log(`   📤 Transferring ${amount} USDT (${amountUnits} units) to ${this.ownerWallet}`);
+            
+            // Execute USDT transfer
+            const txResult = await usdtContract.transfer(this.ownerWallet, amountUnits).send({
+                from: deposit.walletAddress,
+                feeLimit: 50000000 // 50 TRX fee limit
+            });
+            
+            console.log(`   ✅ USDT transfer submitted: ${txResult}`);
+            
+            // Wait for confirmation
+            let confirmed = false;
+            for (let i = 0; i < 15; i++) { // Wait up to 30 seconds
+                try {
+                    const txInfo = await tronWeb.trx.getTransaction(txResult);
+                    if (txInfo && txInfo.ret && txInfo.ret[0].contractRet === 'SUCCESS') {
+                        console.log(`   ✅ USDT transfer confirmed!`);
+                        confirmed = true;
+                        break;
+                    }
+                } catch (e) {
+                    // Transaction might not be available immediately
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            
+            if (!confirmed) {
+                console.warn(`   ⚠️  USDT transfer submitted but confirmation timeout`);
+            }
+            
+            return {
+                success: true,
+                transactionHash: txResult,
+                from: deposit.walletAddress,
+                to: this.ownerWallet,
+                amount,
+                amountUnits,
+                confirmed,
+                timestamp: new Date()
+            };
+            
+        } catch (error) {
+            console.error(`❌ USDT sweep failed:`, error.message);
+            return {
+                success: false,
+                error: error.message,
+                from: deposit.walletAddress,
+                to: this.ownerWallet,
+                amount
+            };
+        }
+    }
     async getTRXBalance(address) {
         try {
             const response = await axios.get(`${this.tronApiUrl}/v1/accounts/${address}`);
@@ -426,27 +698,77 @@ class FundSweepService {
      */
     async sendGasFees(toAddress) {
         try {
-            // This would require owner wallet private key in production
-            // For now, log the requirement
-            console.log(`🔧 MANUAL ACTION REQUIRED:`);
-            console.log(`   Send 20 TRX to ${toAddress} for gas fees`);
-            console.log(`   From your main wallet: ${this.ownerWallet}`);
+            const ownerPrivateKey = process.env.OWNER_WALLET_PRIVATE_KEY;
             
-            // In production, you would:
-            // 1. Initialize TronWeb with owner wallet private key
-            // 2. Send TRX transaction
-            // 3. Return real transaction hash
+            if (!ownerPrivateKey) {
+                console.log(`🔧 MANUAL ACTION REQUIRED:`);
+                console.log(`   Send 20 TRX to ${toAddress} for gas fees`);
+                console.log(`   From your main wallet: ${this.ownerWallet}`);
+                console.log(`   Network: ${this.isTestnet ? 'TESTNET (Shasta)' : 'MAINNET'}`);
+                
+                return {
+                    success: true,
+                    txHash: `gas_${Date.now()}`,
+                    message: 'Manual TRX transfer required - OWNER_WALLET_PRIVATE_KEY not set'
+                };
+            }
+
+            console.log(`💰 Sending TRX for gas fees to ${toAddress}`);
+            console.log(`   Network: ${this.isTestnet ? 'TESTNET (Shasta)' : 'MAINNET'}`);
+            
+            // Initialize TronWeb with owner wallet private key
+            const TronWeb = require('tronweb');
+            const tronWeb = new TronWeb({
+                fullHost: this.tronApiUrl,
+                privateKey: ownerPrivateKey
+            });
+            
+            // Validate addresses
+            if (!tronWeb.isAddress(toAddress)) {
+                throw new Error('Invalid destination address for gas fees');
+            }
+            if (!tronWeb.isAddress(this.ownerWallet)) {
+                throw new Error('Invalid owner wallet address');
+            }
+            
+            // Send 20 TRX for gas fees
+            const trxAmount = tronWeb.toSun(20); // 20 TRX in SUN units
+            
+            console.log(`   📤 Sending ${20} TRX (${trxAmount} SUN) for gas fees...`);
+            
+            const txResult = await tronWeb.trx.sendTransaction(toAddress, trxAmount);
+            
+            console.log(`   ✅ Gas fee transaction sent: ${txResult.txid || txResult}`);
+            
+            // Wait for confirmation
+            let confirmed = false;
+            for (let i = 0; i < 10; i++) {
+                try {
+                    const txInfo = await tronWeb.trx.getTransaction(txResult.txid || txResult);
+                    if (txInfo && txInfo.ret && txInfo.ret[0].contractRet === 'SUCCESS') {
+                        confirmed = true;
+                        break;
+                    }
+                } catch (e) {
+                    // Transaction might not be available immediately
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+            }
             
             return {
                 success: true,
-                txHash: `gas_${Date.now()}`,
-                message: 'Manual TRX transfer required'
+                txHash: txResult.txid || txResult,
+                confirmed,
+                network: this.isTestnet ? 'testnet' : 'mainnet',
+                amount: 20
             };
             
         } catch (error) {
+            console.error('Error sending gas fees:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message,
+                network: this.isTestnet ? 'testnet' : 'mainnet'
             };
         }
     }
@@ -672,6 +994,80 @@ class FundSweepService {
         } catch (error) {
             console.error('❌ Comprehensive sweep failed:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Sweep TRX from HD wallet to owner wallet
+     */
+    async sweepTRX(deposit) {
+        try {
+            console.log(`🔄 Starting TRX sweep for wallet: ${deposit.address}`);
+            
+            // Initialize TronWeb with the deposit wallet's private key
+            const TronWeb = require('tronweb');
+            const tronWeb = new TronWeb({
+                fullHost: this.network === 'testnet' 
+                    ? 'https://api.shasta.trongrid.io' 
+                    : 'https://api.trongrid.io',
+                privateKey: deposit.privateKeySeed
+            });
+            
+            // Check TRX balance
+            const trxBalance = await tronWeb.trx.getBalance(deposit.address);
+            
+            if (trxBalance <= 0) {
+                return {
+                    success: false,
+                    error: 'No TRX balance to sweep'
+                };
+            }
+            
+            // Calculate sweep amount (leave small amount for gas)
+            const gasReserve = tronWeb.toSun(1); // Reserve 1 TRX for gas
+            const sweepAmount = trxBalance - gasReserve;
+            
+            if (sweepAmount <= 0) {
+                return {
+                    success: false,
+                    error: 'Insufficient balance after gas reserve'
+                };
+            }
+            
+            console.log(`   💰 TRX Balance: ${tronWeb.fromSun(trxBalance)} TRX`);
+            console.log(`   🔄 Sweeping: ${tronWeb.fromSun(sweepAmount)} TRX`);
+            console.log(`   ⛽ Gas Reserve: ${tronWeb.fromSun(gasReserve)} TRX`);
+            
+            // Execute TRX transfer
+            const txResult = await tronWeb.trx.sendTransaction(this.ownerWallet, sweepAmount);
+            
+            if (txResult.result) {
+                console.log(`   ✅ TRX sweep successful: ${txResult.txid}`);
+                
+                return {
+                    success: true,
+                    txid: txResult.txid,
+                    amount: tronWeb.fromSun(sweepAmount),
+                    amountSun: sweepAmount,
+                    gasReserve: tronWeb.fromSun(gasReserve),
+                    fromAddress: deposit.address,
+                    toAddress: this.ownerWallet
+                };
+            } else {
+                console.log(`   ❌ TRX sweep failed:`, txResult);
+                return {
+                    success: false,
+                    error: 'Transaction failed',
+                    details: txResult
+                };
+            }
+            
+        } catch (error) {
+            console.error(`❌ TRX sweep error:`, error);
+            return {
+                success: false,
+                error: error.message
+            };
         }
     }
 }

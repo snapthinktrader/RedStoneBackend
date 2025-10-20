@@ -66,6 +66,20 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  notificationSettings: {
+    email: {
+      type: Boolean,
+      default: true,
+    },
+    sms: {
+      type: Boolean,
+      default: false,
+    },
+    push: {
+      type: Boolean,
+      default: true,
+    },
+  },
   lastLoginAt: {
     type: Date,
     default: null,
@@ -98,6 +112,15 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0.00,
     min: [0, 'Total earnings cannot be negative'],
+  },
+  lastEarningUpdate: {
+    type: Date,
+    default: null, // Will be set when first deposit is confirmed
+  },
+  pendingEarnings: {
+    type: Number,
+    default: 0.00,
+    min: [0, 'Pending earnings cannot be negative'],
   },
   directReferrals: {
     type: Number,
@@ -144,12 +167,13 @@ userSchema.virtual('levelName').get(function() {
     4: 'Platinum',
     5: 'Diamond'
   };
-  return levels[this.currentLevel] || `Level ${this.currentLevel}`;
+  return levels[this.currentLevel] || `Level ${this.currentLevel || 1}`;
 });
 
 userSchema.virtual('commissionRate').get(function() {
   const rates = JSON.parse(process.env.LEVEL_COMMISSION_RATES || '{"1":0.05,"2":0.08,"3":0.12,"4":0.15,"5":0.20}');
-  return rates[this.currentLevel.toString()] || 0.05;
+  const level = this.currentLevel || 1;
+  return rates[level.toString()] || 0.05;
 });
 
 // Pre-save middleware
@@ -194,13 +218,56 @@ userSchema.methods.updateLevel = function() {
 };
 
 userSchema.methods.getDailyEarnings = function() {
+  // Daily earnings are 2% of the total wallet balance (including deposits, commissions, bonuses)
   const rate = parseFloat(process.env.DAILY_EARNING_RATE) || 0.02;
-  return this.walletBalance * rate;
+  return (this.walletBalance || 0) * rate;
 };
 
 userSchema.methods.getCommissionRate = function() {
   const rates = JSON.parse(process.env.LEVEL_COMMISSION_RATES || '{"1":0.05,"2":0.08,"3":0.12,"4":0.15,"5":0.20}');
   return rates[this.currentLevel.toString()] || 0.05;
+};
+
+/**
+ * Calculate real-time earnings based on elapsed time since last update
+ * Earnings = 2% daily = 0.02 / 86400 seconds per second
+ * @returns {Object} { calculatedBalance, pendingEarnings, lastUpdate }
+ */
+userSchema.methods.calculateRealTimeEarnings = function() {
+  const DAILY_RATE = 0.02; // 2% per day
+  const SECONDS_PER_DAY = 86400;
+  const RATE_PER_SECOND = DAILY_RATE / SECONDS_PER_DAY; // 0.000023148148...
+  
+  const now = new Date();
+  const lastUpdate = this.lastEarningUpdate || this.createdAt || now;
+  const elapsedSeconds = Math.floor((now - lastUpdate) / 1000);
+  
+  // If no balance or no time elapsed, return current state
+  if (!this.walletBalance || elapsedSeconds <= 0) {
+    return {
+      calculatedBalance: this.walletBalance || 0,
+      pendingEarnings: 0,
+      elapsedSeconds: 0,
+      lastUpdate: lastUpdate,
+      currentTime: now
+    };
+  }
+  
+  // Calculate earnings based on current wallet balance
+  // The balance grows exponentially: Balance(t) = Balance(0) * (1 + rate)^(seconds)
+  // For small rates and short time periods, we can approximate: Balance(0) * (1 + rate * seconds)
+  const compoundFactor = Math.pow(1 + RATE_PER_SECOND, elapsedSeconds);
+  const newEarnings = this.walletBalance * (compoundFactor - 1);
+  
+  return {
+    calculatedBalance: this.walletBalance + newEarnings,
+    pendingEarnings: newEarnings,
+    elapsedSeconds: elapsedSeconds,
+    lastUpdate: lastUpdate,
+    currentTime: now,
+    dailyRate: DAILY_RATE,
+    ratePerSecond: RATE_PER_SECOND
+  };
 };
 
 userSchema.methods.addRefreshToken = function(token) {

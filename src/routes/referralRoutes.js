@@ -30,8 +30,8 @@ router.get('/', [
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    // Get direct referrals (Level 1)
-    const directReferrals = await User.find({
+    // Get direct referrals (Level 1) with their earnings contribution
+    const directReferralsRaw = await User.find({
       referredBy: req.user.userId,
       isActive: true,
     })
@@ -39,6 +39,46 @@ router.get('/', [
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit);
+
+    // Calculate earnings from each referred user
+    const directReferrals = await Promise.all(directReferralsRaw.map(async (referral) => {
+      // Get commission earnings from this specific user
+      const commissionData = await Transaction.aggregate([
+        {
+          $match: {
+            userId: req.user.userId,
+            type: 'REFERRAL_COMMISSION',
+            status: 'COMPLETED',
+            'metadata.refereeId': referral._id
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: { $sum: '$amount' },
+            transactionCount: { $sum: 1 },
+            lastEarning: { $max: '$createdAt' }
+          }
+        }
+      ]);
+
+      const earnings = commissionData[0] || { totalEarnings: 0, transactionCount: 0, lastEarning: null };
+
+      return {
+        _id: referral._id,
+        name: referral.name,
+        email: referral.email,
+        walletBalance: referral.walletBalance,
+        totalDeposit: referral.totalDeposit,
+        currentLevel: referral.currentLevel,
+        joinedAt: referral.createdAt,
+        myEarningsFromThisUser: {
+          total: earnings.totalEarnings,
+          commissionCount: earnings.transactionCount,
+          lastEarningDate: earnings.lastEarning
+        }
+      };
+    }));
 
     // Get total count of direct referrals
     const totalDirectReferrals = await User.countDocuments({
@@ -182,6 +222,86 @@ router.get('/', [
     res.status(500).json({
       success: false,
       message: 'Error fetching referral data',
+    });
+  }
+});
+
+// @route   GET /api/referrals/user-referrals
+// @desc    Get user's referrals (for mobile app compatibility)
+// @access  Private
+router.get('/user-referrals', auth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Get direct referrals with earnings
+    const directReferralsRaw = await User.find({
+      referredBy: req.user.userId,
+      isActive: true,
+    })
+    .select('name email walletBalance totalDeposit currentLevel createdAt')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+    // Calculate earnings from each referred user
+    const referrals = await Promise.all(directReferralsRaw.map(async (referral) => {
+      const commissionData = await Transaction.aggregate([
+        {
+          $match: {
+            userId: req.user.userId,
+            type: 'REFERRAL_COMMISSION',
+            status: 'COMPLETED',
+            'metadata.refereeId': referral._id
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalEarnings: { $sum: '$amount' },
+            transactionCount: { $sum: 1 },
+            lastEarning: { $max: '$createdAt' }
+          }
+        }
+      ]);
+
+      const earnings = commissionData[0] || { totalEarnings: 0, transactionCount: 0, lastEarning: null };
+
+      return {
+        id: referral._id.toString(),
+        referrerId: req.user.userId,
+        refereeId: referral._id.toString(),
+        refereeName: referral.name,
+        refereeEmail: referral.email,
+        commissionEarned: earnings.totalEarnings,
+        level: 1, // Direct referral
+        joinedAt: referral.createdAt.toISOString(),
+        refereeDeposit: referral.totalDeposit,
+        isActive: true,
+        // Additional data for enhanced display
+        walletBalance: referral.walletBalance,
+        currentLevel: referral.currentLevel,
+        myEarningsFromThisUser: {
+          total: earnings.totalEarnings,
+          commissionCount: earnings.transactionCount,
+          lastEarningDate: earnings.lastEarning
+        }
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        referrals
+      },
+    });
+
+  } catch (error) {
+    logger.error('Get user referrals error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching referrals',
     });
   }
 });

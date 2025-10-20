@@ -15,10 +15,11 @@ const dailyEarningsJob = cron.schedule('0 3 * * *', async () => {
   logger.info('Starting daily earnings calculation...');
   
   try {
-    // Get all active users with wallet balance > 0
+    // Get all active users with totalDeposit > 0 (not walletBalance)
+    // Daily earnings are calculated on the principal (totalDeposit), not current balance
     const users = await User.find({
       isActive: true,
-      walletBalance: { $gt: 0 },
+      totalDeposit: { $gt: 0 },
     });
 
     logger.info(`Processing daily earnings for ${users.length} users`);

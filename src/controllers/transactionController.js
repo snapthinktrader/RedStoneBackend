@@ -547,6 +547,163 @@ class TransactionController {
     };
     return rates[userLevel] || 0.05;
   }
+
+  /**
+   * Get combined transaction history (successful deposits and withdrawals only)
+   * This endpoint returns only COMPLETED transactions of types DEPOSIT and WITHDRAWAL
+   */
+  static async getTransactionHistory(req, res) {
+    try {
+      const userId = req.user.id;
+      const { page = 1, limit = 20 } = req.query;
+
+      const offset = (page - 1) * limit;
+
+      // Get only COMPLETED deposits and withdrawals
+      const where = {
+        userId,
+        type: { [Op.in]: ['DEPOSIT', 'WITHDRAWAL'] },
+        status: 'COMPLETED'
+      };
+
+      const { count, rows: transactions } = await Transaction.findAndCountAll({
+        where,
+        order: [['createdAt', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      });
+
+      const totalPages = Math.ceil(count / limit);
+
+      res.json({
+        success: true,
+        data: {
+          transactions,
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get transaction history error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Get deposit history (all statuses)
+   * This endpoint returns ALL deposit transactions regardless of status
+   */
+  static async getDepositHistory(req, res) {
+    try {
+      const userId = req.user.id;
+      const { page = 1, limit = 20, status } = req.query;
+
+      const offset = (page - 1) * limit;
+      const where = {
+        userId,
+        type: 'DEPOSIT'
+      };
+
+      // Optional status filter
+      if (status) {
+        where.status = status;
+      }
+
+      const { count, rows: deposits } = await Transaction.findAndCountAll({
+        where,
+        order: [['createdAt', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      });
+
+      const totalPages = Math.ceil(count / limit);
+
+      res.json({
+        success: true,
+        data: {
+          deposits,
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get deposit history error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Get withdrawal history (all statuses)
+   * This endpoint returns ALL withdrawal transactions regardless of status
+   */
+  static async getWithdrawalHistory(req, res) {
+    try {
+      const userId = req.user.id;
+      const { page = 1, limit = 20, status } = req.query;
+
+      const offset = (page - 1) * limit;
+      const where = {
+        userId,
+        type: 'WITHDRAWAL'
+      };
+
+      // Optional status filter
+      if (status) {
+        where.status = status;
+      }
+
+      const { count, rows: withdrawals } = await Transaction.findAndCountAll({
+        where,
+        order: [['createdAt', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      });
+
+      const totalPages = Math.ceil(count / limit);
+
+      res.json({
+        success: true,
+        data: {
+          withdrawals,
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get withdrawal history error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
 }
 
 module.exports = TransactionController;

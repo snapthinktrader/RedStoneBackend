@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: redstone-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: node api/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false # Set manually in Render dashboard for security
+      - key: TRON_NETWORK
+        value: mainnet
+      - key: AUTO_SWEEP_ENABLED
+        value: false
+      - key: VERCEL
+        value: "0"
+    healthCheckPath: /api/health
+    autoDeploy: true

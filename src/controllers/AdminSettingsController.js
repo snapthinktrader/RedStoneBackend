@@ -1,6 +1,6 @@
 const AdminSettings = require('../models/AdminSettings');
 const FundSweepService = require('../services/FundSweepService');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 /**
  * Admin Settings Controller

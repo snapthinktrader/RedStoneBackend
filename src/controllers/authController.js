@@ -52,6 +52,25 @@ class AuthController {
 
       await user.save();
 
+      // Update referral counts
+      if (referredBy) {
+        // Increment direct referrals for the referrer
+        await User.findByIdAndUpdate(referredBy._id, {
+          $inc: { directReferrals: 1 }
+        });
+        
+        logger.info(`✅ Incremented directReferrals for user ${referredBy._id} (${referredBy.name})`);
+        
+        // If referrer was also referred by someone, increment indirect referrals for that person
+        if (referredBy.referredBy) {
+          await User.findByIdAndUpdate(referredBy.referredBy, {
+            $inc: { indirectReferrals: 1 }
+          });
+          
+          logger.info(`✅ Incremented indirectReferrals for user ${referredBy.referredBy}`);
+        }
+      }
+
       // Send verification email
       try {
         await emailService.sendVerificationEmail(email, name, verificationOTP);

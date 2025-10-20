@@ -15,9 +15,18 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const referralRoutes = require('./routes/referralRoutes');
+const referralFingerprintRoutes = require('./routes/referral'); // Fingerprint-based referral matching
 const paymentRoutes = require('./routes/payment');
 const adminPaymentRoutes = require('./routes/adminPayment');
+const adminAuthRoutes = require('./routes/adminAuth');
 const adminRoutes = require('./routes/adminRoutes');
+const appRoutes = require('./routes/appRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
+const chunkedUploadRoutes = require('./routes/chunkedUpload');
+const apkManagementRoutes = require('./routes/apkManagement');
+console.log('🟢 Chunked upload routes loaded in server.js');
+const { router: autoSweepRoutes } = require('./routes/autoSweepSimple');
+const CompleteAutoSweepService = require('./services/CompleteAutoSweepService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -62,13 +71,21 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/auth/admin', adminAuthRoutes); // Admin authentication (no auth required) - MUST be before /api/admin
 app.use('/api/users', userRoutes);
 app.use('/api/transaction', transactionRoutes);
-app.use('/api/referral', referralRoutes);
+app.use('/api/referral', referralRoutes); // Existing referral endpoints
+app.use('/api/referral', referralFingerprintRoutes); // Fingerprint matching endpoints
 app.use('/api/payment', paymentRoutes);
 app.use('/api/admin/payment', adminPaymentRoutes);
 app.use('/api/admin/settings', require('./routes/adminSettings'));
+app.use('/api/admin/auto-sweep', autoSweepRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/app', appRoutes); // App version management (public + admin)
+app.use('/api/upload', uploadRoutes); // File upload (admin only)
+app.use('/api/chunked-upload', chunkedUploadRoutes); // Chunked file upload
+app.use('/api/apk-management', apkManagementRoutes); // APK version management
+app.use('/api/download', uploadRoutes); // File download (public)
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -113,11 +130,23 @@ const startServer = async () => {
     initializeCronJobs();
     logger.info('Cron jobs initialized successfully.');
 
+    // Initialize Complete Auto-Sweep Service
+    const completeAutoSweepService = new CompleteAutoSweepService();
+    if (process.env.AUTO_SWEEP_ENABLED === 'true') {
+      completeAutoSweepService.start();
+      logger.info('🔄 Complete Auto-sweep service started successfully.');
+    } else {
+      logger.info('⏸️ Auto-sweep service is disabled.');
+    }
+
     // Start server
     app.listen(PORT, () => {
       logger.info(`🚀 RedStone Backend Server is running on port ${PORT}`);
       logger.info(`📊 Environment: ${process.env.NODE_ENV}`);
       logger.info(`🔗 Frontend URL: ${process.env.FRONTEND_URL}`);
+      logger.info(`🔄 Auto-sweep: ${process.env.AUTO_SWEEP_ENABLED === 'true' ? 'RUNNING' : 'STOPPED'}`);
+      logger.info(`⛽ Fuel Wallet: ${process.env.FUEL_WALLET_ADDRESS || 'Not configured'}`);
+      logger.info(`🏦 Main Wallet: ${process.env.MAINNET_OWNER_WALLET || 'Not configured'}`);
     });
   } catch (error) {
     logger.error('Unable to start server:', error);

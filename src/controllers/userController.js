@@ -16,6 +16,9 @@ class UserController {
         });
       }
 
+      // Calculate real-time earnings
+      const earningsData = user.calculateRealTimeEarnings();
+
       res.json({
         success: true,
         data: {
@@ -24,8 +27,13 @@ class UserController {
             name: user.name,
             email: user.email,
             referralCode: user.referralCode,
-            walletBalance: user.walletBalance,
+            walletBalance: earningsData.calculatedBalance, // Real-time balance
+            storedBalance: user.walletBalance, // Original stored balance
+            pendingEarnings: earningsData.pendingEarnings, // Earnings since last update
             totalDeposit: user.totalDeposit,
+            totalEarnings: user.totalEarnings || 0, // Total earnings from database
+            directReferrals: user.directReferrals || 0,
+            indirectReferrals: user.indirectReferrals || 0,
             currentLevel: user.currentLevel,
             levelName: user.levelName,
             commissionRate: user.commissionRate,
@@ -34,6 +42,10 @@ class UserController {
             profilePicture: user.profilePicture,
             createdAt: user.createdAt,
             lastLoginAt: user.lastLoginAt,
+            lastEarningUpdate: earningsData.lastUpdate,
+            // Add earning rate info for client-side calculation
+            dailyEarningRate: earningsData.dailyRate,
+            secondlyEarningRate: earningsData.ratePerSecond,
           },
         },
       });
@@ -125,6 +137,9 @@ class UserController {
           message: 'User not found',
         });
       }
+
+      // Calculate real-time earnings
+      const earningsData = user.calculateRealTimeEarnings();
 
       // Get referral statistics
       const directReferrals = await User.countDocuments({
@@ -235,19 +250,25 @@ class UserController {
             id: user._id,
             name: user.name,
             email: user.email,
-            walletBalance: user.walletBalance,
+            walletBalance: earningsData.calculatedBalance, // Real-time balance
+            storedBalance: user.walletBalance, // Original stored balance
+            pendingEarnings: earningsData.pendingEarnings, // Earnings since last update
             totalDeposit: user.totalDeposit,
             currentLevel: user.currentLevel,
             referralCode: user.referralCode,
             dailyEarnings: user.dailyEarnings,
             levelName: user.levelName,
             commissionRate: user.commissionRate,
+            lastEarningUpdate: earningsData.lastUpdate,
+            // Add earning rate info for client-side calculation
+            dailyEarningRate: earningsData.dailyRate,
+            secondlyEarningRate: earningsData.ratePerSecond,
           },
           stats: {
             directReferrals,
             indirectReferrals: totalIndirectReferrals,
-            monthlyEarnings: monthlyEarningsTotal,
-            totalEarnings: totalEarningsAmount,
+            monthlyEarnings: monthlyEarningsTotal + earningsData.pendingEarnings, // Include pending
+            totalEarnings: totalEarningsAmount + earningsData.pendingEarnings, // Include pending
             pendingWithdrawals: pendingWithdrawalsAmount,
             nextMilestone
           },

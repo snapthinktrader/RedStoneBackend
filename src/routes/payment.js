@@ -105,4 +105,27 @@ router.get('/withdrawals',
     PaymentController.getWithdrawalHistory
 );
 
+// Auto-sweep routes
+router.get('/auto-sweep/status', 
+    auth, 
+    PaymentController.getAutoSweepStatus
+);
+
+router.post('/auto-sweep/start', 
+    auth, 
+    PaymentController.startAutoSweep
+);
+
+router.post('/auto-sweep/stop', 
+    auth, 
+    PaymentController.stopAutoSweep
+);
+
+router.get('/deposits/:depositId/sweep-info', 
+    auth, 
+    idValidation, 
+    validate, 
+    PaymentController.getDepositWithSweepInfo
+);
+
 module.exports = router;

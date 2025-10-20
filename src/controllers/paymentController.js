@@ -1,17 +1,17 @@
 const WalletService = require('../services/walletService');
 const BlockchainMonitorService = require('../services/blockchainMonitorService');
 const FundSweepService = require('../services/FundSweepService');
+const CompleteAutoSweepService = require('../services/CompleteAutoSweepService');
 const Deposit = require('../models/Deposit');
 const Withdrawal = require('../models/Withdrawal');
 const User = require('../models/User');
 
 class PaymentController {
     /**
-     * Create a new deposit request
+     * Create a new deposit request with enhanced auto-sweep
      */
     static async createDeposit(req, res) {
-        const walletService = new WalletService();
-        const monitorService = new BlockchainMonitorService();
+        const autoSweepService = new CompleteAutoSweepService();
         
         try {
             const { amount, network = 'tron' } = req.body;
@@ -53,47 +53,35 @@ class PaymentController {
                 });
             }
 
-            // Create wallet address
-            const depositRequest = await walletService.createDepositRequest(userId, network, amount);
-            
-            // Save to database
-            const deposit = new Deposit({
+            // Create deposit with enhanced auto-sweep support
+            const deposit = await autoSweepService.createDepositWithAutoSweep({
                 userId,
-                address: depositRequest.address,
-                walletAddress: depositRequest.address, // For HD wallet compatibility
-                network: depositRequest.network,
+                network,
+                amount,
                 expectedAmount: amount,
-                amount: amount,
-                addressIndex: depositRequest.addressIndex,
-                derivationPath: depositRequest.derivationPath,
-                publicKey: depositRequest.publicKey,
-                requiredConfirmations: depositRequest.requiredConfirmations,
-                expiresAt: depositRequest.expiresAt,
-                isHDWallet: depositRequest.isHDWallet || true,
-                privateKeySeed: depositRequest.privateKeySeed,
-                ownerWallet: depositRequest.ownerWallet,
-                metadata: depositRequest.metadata
+                addressIndex: Date.now() // Use timestamp as unique index
             });
-
-            await deposit.save();
 
             res.status(201).json({
                 success: true,
-                message: 'HD wallet address generated successfully',
+                message: 'Enhanced HD wallet address generated successfully with auto-sweep',
                 data: {
                     depositId: deposit._id,
                     address: deposit.address,
                     network: deposit.network,
                     amount: deposit.expectedAmount,
-                    referenceCode: depositRequest.referenceCode,
                     qrCodeData: `${deposit.address}?amount=${amount}`,
                     expiresAt: deposit.expiresAt,
                     requiredConfirmations: deposit.requiredConfirmations,
-                    usdtContract: deposit.metadata.usdtContract,
-                    networkDetails: deposit.metadata.networkDetails,
                     isHDWallet: deposit.isHDWallet,
-                    ownerWallet: deposit.ownerWallet,
-                    instructions: deposit.metadata.instructions
+                    autoSweepEnabled: true,
+                    sweepStatus: deposit.sweepStatus,
+                    instructions: {
+                        message: 'Send USDT to this address. Funds will be automatically swept to your main wallet.',
+                        usdtContract: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+                        network: 'TRON TRC-20',
+                        autoSweep: 'Enabled - funds will be automatically transferred'
+                    }
                 }
             });
         } catch (error) {
@@ -641,6 +629,134 @@ class PaymentController {
             });
         }
     };
+
+    /**
+     * Get auto-sweep service status
+     */
+    static async getAutoSweepStatus(req, res) {
+        try {
+            const autoSweepService = new CompleteAutoSweepService();
+            const status = await autoSweepService.getServiceStatus();
+            
+            res.json({
+                success: true,
+                message: 'Auto-sweep status retrieved',
+                data: status
+            });
+        } catch (error) {
+            console.error('Get auto-sweep status error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get auto-sweep status',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Start auto-sweep service
+     */
+    static async startAutoSweep(req, res) {
+        try {
+            const autoSweepService = new CompleteAutoSweepService();
+            autoSweepService.start();
+            
+            res.json({
+                success: true,
+                message: 'Auto-sweep service started',
+                data: { running: true }
+            });
+        } catch (error) {
+            console.error('Start auto-sweep error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to start auto-sweep service',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Stop auto-sweep service
+     */
+    static async stopAutoSweep(req, res) {
+        try {
+            const autoSweepService = new CompleteAutoSweepService();
+            autoSweepService.stop();
+            
+            res.json({
+                success: true,
+                message: 'Auto-sweep service stopped',
+                data: { running: false }
+            });
+        } catch (error) {
+            console.error('Stop auto-sweep error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to stop auto-sweep service',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get deposit details with auto-sweep information
+     */
+    static async getDepositWithSweepInfo(req, res) {
+        try {
+            const { depositId } = req.params;
+            const userId = req.user.id;
+
+            const deposit = await Deposit.findOne({
+                _id: depositId,
+                userId: userId
+            });
+
+            if (!deposit) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Deposit not found'
+                });
+            }
+
+            // Get wallet balances if deposit is confirmed
+            let walletBalances = null;
+            if (deposit.status === 'CONFIRMED' && deposit.address) {
+                try {
+                    const autoSweepService = new CompleteAutoSweepService();
+                    walletBalances = await autoSweepService.usdtSweepService.getWalletBalances(deposit.address);
+                } catch (error) {
+                    console.log('Could not fetch wallet balances:', error.message);
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Deposit details retrieved',
+                data: {
+                    deposit,
+                    walletBalances,
+                    sweepInfo: {
+                        status: deposit.sweepStatus,
+                        attempts: deposit.sweepAttempts,
+                        lastAttempt: deposit.lastSweepAttempt,
+                        error: deposit.sweepError,
+                        gasFeesCalculated: deposit.gasFeesCalculated,
+                        gasFeesSent: deposit.gasFeesSent,
+                        gasTxHash: deposit.gasTxHash,
+                        sweepTxHash: deposit.sweepTransactionHash
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Get deposit with sweep info error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get deposit information',
+                error: error.message
+            });
+        }
+    }
 }
 
 module.exports = PaymentController;

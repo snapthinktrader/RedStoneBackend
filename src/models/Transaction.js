@@ -11,7 +11,7 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Transaction type is required'],
     enum: {
-      values: ['DEPOSIT', 'WITHDRAWAL', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS'],
+      values: ['DEPOSIT', 'WITHDRAWAL', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS', 'MANUAL_CREDIT', 'PROMOTIONAL_BONUS', 'SUPPORT_CREDIT'],
       message: '{VALUE} is not a valid transaction type'
     },
     index: true,
@@ -105,6 +105,9 @@ transactionSchema.virtual('typeDisplayName').get(function() {
     'DAILY_EARNING': 'Daily Earnings',
     'REFERRAL_COMMISSION': 'Referral Bonus',
     'MILESTONE_BONUS': 'Milestone Bonus',
+    'MANUAL_CREDIT': 'Manual Credit',
+    'PROMOTIONAL_BONUS': 'Promotional Bonus',
+    'SUPPORT_CREDIT': 'Support Credit',
   };
   return typeNames[this.type] || this.type;
 });
@@ -120,7 +123,7 @@ transactionSchema.virtual('statusDisplayName').get(function() {
 });
 
 transactionSchema.virtual('isIncoming').get(function() {
-  return ['DEPOSIT', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS'].includes(this.type);
+  return ['DEPOSIT', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS', 'MANUAL_CREDIT', 'PROMOTIONAL_BONUS', 'SUPPORT_CREDIT'].includes(this.type);
 });
 
 transactionSchema.virtual('formattedAmount').get(function() {
@@ -149,7 +152,7 @@ transactionSchema.pre('save', function(next) {
 
 // Instance methods
 transactionSchema.methods.getFormattedAmount = function() {
-  const isIncoming = ['DEPOSIT', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS'].includes(this.type);
+  const isIncoming = ['DEPOSIT', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS', 'MANUAL_CREDIT', 'PROMOTIONAL_BONUS', 'SUPPORT_CREDIT'].includes(this.type);
   const sign = isIncoming ? '+' : '-';
   return `${sign}$${this.amount.toFixed(2)}`;
 };
@@ -161,6 +164,9 @@ transactionSchema.methods.getTypeDisplayName = function() {
     'DAILY_EARNING': 'Daily Earnings',
     'REFERRAL_COMMISSION': 'Referral Bonus',
     'MILESTONE_BONUS': 'Milestone Bonus',
+    'MANUAL_CREDIT': 'Manual Credit',
+    'PROMOTIONAL_BONUS': 'Promotional Bonus',
+    'SUPPORT_CREDIT': 'Support Credit',
   };
   return typeNames[this.type] || this.type;
 };

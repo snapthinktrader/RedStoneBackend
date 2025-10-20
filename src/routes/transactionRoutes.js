@@ -8,6 +8,196 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+// @route   GET /api/transaction/history
+// @desc    Get transaction history (successful deposits and withdrawals only)
+// @access  Private
+router.get('/history', [
+  auth,
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+], async (req, res) => {
+  try {
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array(),
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Get only COMPLETED deposits and withdrawals
+    const filter = {
+      userId: req.user.userId,
+      type: { $in: ['DEPOSIT', 'WITHDRAWAL'] },
+      status: 'COMPLETED'
+    };
+
+    const transactions = await Transaction.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const totalTransactions = await Transaction.countDocuments(filter);
+    const totalPages = Math.ceil(totalTransactions / limit);
+
+    res.json({
+      success: true,
+      data: {
+        transactions,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalTransactions,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error('Get transaction history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching transaction history',
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/transaction/deposits
+// @desc    Get deposit history (all statuses)
+// @access  Private
+router.get('/deposits', [
+  auth,
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('status').optional().isIn(['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED']),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array(),
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = {
+      userId: req.user.userId,
+      type: 'DEPOSIT'
+    };
+
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+
+    const deposits = await Transaction.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const totalDeposits = await Transaction.countDocuments(filter);
+    const totalPages = Math.ceil(totalDeposits / limit);
+
+    res.json({
+      success: true,
+      data: {
+        deposits,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalDeposits,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error('Get deposit history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching deposit history',
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/transaction/withdrawals
+// @desc    Get withdrawal history (all statuses)
+// @access  Private
+router.get('/withdrawals', [
+  auth,
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('status').optional().isIn(['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED']),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array(),
+      });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = {
+      userId: req.user.userId,
+      type: 'WITHDRAWAL'
+    };
+
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+
+    const withdrawals = await Transaction.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const totalWithdrawals = await Transaction.countDocuments(filter);
+    const totalPages = Math.ceil(totalWithdrawals / limit);
+
+    res.json({
+      success: true,
+      data: {
+        withdrawals,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalWithdrawals,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      },
+    });
+
+  } catch (error) {
+    console.error('Get withdrawal history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching withdrawal history',
+      error: error.message,
+    });
+  }
+});
+
 // @route   GET /api/transactions
 // @desc    Get user transactions with pagination and filtering
 // @access  Private
@@ -42,8 +232,7 @@ router.get('/', [
     const transactions = await Transaction.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit)
-      .populate('userId', 'name email');
+      .limit(limit);
 
     // Get total count for pagination
     const totalTransactions = await Transaction.countDocuments(filter);
@@ -64,10 +253,11 @@ router.get('/', [
     });
 
   } catch (error) {
-    logger.error('Get transactions error:', error);
+    console.error('Get transactions error:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching transactions',
+      error: error.message,
     });
   }
 });

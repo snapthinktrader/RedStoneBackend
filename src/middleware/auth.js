@@ -20,7 +20,19 @@ const auth = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Find user
+    // Check if this is an admin token (separate from user accounts)
+    if (decoded.type === 'admin' && decoded.role === 'admin') {
+      // Admin token - no need to check database
+      req.user = {
+        id: decoded.id,
+        username: decoded.username,
+        role: decoded.role,
+        type: decoded.type
+      };
+      return next();
+    }
+
+    // Regular user token - find user in database
     const user = await User.findById(decoded.userId);
     if (!user) {
       return res.status(401).json({
