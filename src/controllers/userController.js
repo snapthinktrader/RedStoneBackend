@@ -16,8 +16,15 @@ class UserController {
         });
       }
 
-      // Calculate real-time earnings
+      // Calculate real-time earnings from own deposits
       const earningsData = user.calculateRealTimeEarnings();
+      
+      // Calculate real-time referral commission earnings
+      const referralCommissionData = await user.calculateRealTimeReferralCommission();
+
+      // Total real-time earnings = own earnings + referral commissions
+      const totalPendingEarnings = earningsData.pendingEarnings + referralCommissionData.pendingCommission;
+      const totalCalculatedBalance = earningsData.calculatedBalance + referralCommissionData.pendingCommission;
 
       res.json({
         success: true,
@@ -27,16 +34,26 @@ class UserController {
             name: user.name,
             email: user.email,
             referralCode: user.referralCode,
-            walletBalance: earningsData.calculatedBalance, // Real-time balance
+            walletBalance: totalCalculatedBalance, // Real-time balance including referral commissions
             storedBalance: user.walletBalance, // Original stored balance
-            pendingEarnings: earningsData.pendingEarnings, // Earnings since last update
+            pendingEarnings: totalPendingEarnings, // Total earnings since last update (own + referral)
+            pendingOwnEarnings: earningsData.pendingEarnings, // Own wallet earnings
+            pendingReferralCommission: referralCommissionData.pendingCommission, // Referral commission earnings
+            pendingIndirectCommission: referralCommissionData.pendingIndirectCommission || 0, // Indirect commission earnings
+            dailyReferralCommission: referralCommissionData.dailyCommissionRate, // Daily referral commission rate
+            dailyIndirectCommission: referralCommissionData.dailyIndirectCommissionRate || 0, // Daily indirect commission rate
             totalDeposit: user.totalDeposit,
             totalEarnings: user.totalEarnings || 0, // Total earnings from database
             directReferrals: user.directReferrals || 0,
             indirectReferrals: user.indirectReferrals || 0,
-            currentLevel: user.currentLevel,
-            levelName: user.levelName,
-            commissionRate: user.commissionRate,
+            // Dual-level system
+            currentLevel: user.currentLevel, // Deposit-based level (1-8)
+            referralLevel: user.referralLevel, // Referral-based level (1-9)
+            levelName: user.levelName, // Deposit level name (Basic, Bronze, etc.)
+            // Separate rates for dual-level system
+            dailyEarningRate: user.dailyEarningRate, // Deposit-based daily earning rate
+            commissionRate: user.commissionRate, // Referral-based direct commission rate
+            indirectCommissionRate: user.indirectCommissionRate, // Referral-based indirect commission rate
             isVerified: user.isVerified,
             twoFactorEnabled: user.twoFactorEnabled,
             profilePicture: user.profilePicture,
@@ -44,8 +61,12 @@ class UserController {
             lastLoginAt: user.lastLoginAt,
             lastEarningUpdate: earningsData.lastUpdate,
             // Add earning rate info for client-side calculation
-            dailyEarningRate: earningsData.dailyRate,
             secondlyEarningRate: earningsData.ratePerSecond,
+            // Referral commission details
+            totalReferralDailyEarnings: referralCommissionData.totalReferralDailyEarnings || 0,
+            totalIndirectReferralDailyEarnings: referralCommissionData.totalIndirectReferralDailyEarnings || 0,
+            referralCount: referralCommissionData.referralCount || 0,
+            indirectReferralCount: referralCommissionData.indirectReferralCount || 0,
           },
         },
       });
@@ -350,12 +371,23 @@ class UserController {
         return acc;
       }, {});
 
+      // Calculate real-time referral commission earnings (not yet saved to database)
+      const referralCommissionData = await user.calculateRealTimeReferralCommission();
+
       res.json({
         success: true,
         data: {
           earningsChart,
           commissionsChart,
-          transactionSummary: summary
+          transactionSummary: summary,
+          // Real-time referral commission data
+          realTimeReferralCommission: {
+            pendingCommission: referralCommissionData.pendingCommission,
+            dailyCommissionRate: referralCommissionData.dailyCommissionRate,
+            totalReferralDeposits: referralCommissionData.totalReferralDeposits,
+            commissionRate: referralCommissionData.commissionRate,
+            referralCount: referralCommissionData.referralCount
+          }
         }
       });
 

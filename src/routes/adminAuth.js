@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 // Admin credentials (in production, use environment variables)
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'redstone-admin-secret-fallback-key-2024';
 
 /**
  * Admin Login - Separate from user login
