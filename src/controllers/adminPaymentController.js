@@ -155,12 +155,22 @@ class AdminPaymentController {
                 });
             }
 
-            // Generate unsigned transaction
-            const hotWalletAddress = fromAddress || process.env.HOT_WALLET_ADDRESS;
+            // Use user's reusable deposit wallet for withdrawal (saves fees)
+            // Fallback to hot wallet if no reusable wallet exists
+            let hotWalletAddress = fromAddress;
+            
+            if (!hotWalletAddress && user.currentDepositWallet?.address && user.currentDepositWallet?.isActive) {
+                hotWalletAddress = user.currentDepositWallet.address;
+                console.log(`[Withdrawal] Using user's reusable wallet: ${hotWalletAddress}`);
+            } else if (!hotWalletAddress) {
+                hotWalletAddress = process.env.HOT_WALLET_ADDRESS;
+                console.log(`[Withdrawal] Using hot wallet: ${hotWalletAddress}`);
+            }
+            
             if (!hotWalletAddress) {
                 return res.status(500).json({
                     success: false,
-                    message: 'Hot wallet address not configured'
+                    message: 'Withdrawal wallet not configured'
                 });
             }
 

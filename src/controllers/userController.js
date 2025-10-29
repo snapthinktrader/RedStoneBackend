@@ -609,6 +609,156 @@ class UserController {
       completed: true
     };
   }
+
+  // Get available milestones (dual-track system)
+  static async getMilestones(req, res) {
+    try {
+      const user = await User.findById(req.user.userId);
+      
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      const milestones = user.checkMilestoneBonus();
+
+      res.json({
+        success: true,
+        data: {
+          lowerTrack: {
+            currentCount: user.milestoneTracking?.lowerTrack?.count || 0,
+            lastClaimed: user.milestoneTracking?.lowerTrack?.lastMilestoneClaimed || 0,
+            claimedMilestones: user.milestoneTracking?.lowerTrack?.claimedMilestones || [],
+            availableMilestones: milestones.lowerMilestones
+          },
+          upperTrack: {
+            currentCount: user.milestoneTracking?.upperTrack?.count || 0,
+            lastClaimed: user.milestoneTracking?.upperTrack?.lastMilestoneClaimed || 0,
+            claimedMilestones: user.milestoneTracking?.upperTrack?.claimedMilestones || [],
+            availableMilestones: milestones.upperMilestones,
+            locked: !milestones.canClaimUpper,
+            unlockLevel: 'Bronze' // Bronze+ can claim upper milestones
+          },
+          userLevel: user.currentLevel,
+          levelName: user.levelName
+        }
+      });
+
+    } catch (error) {
+      logger.error('Get milestones error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching milestone data'
+      });
+    }
+  }
+
+  // Claim milestone bonus
+  static async claimMilestone(req, res) {
+    try {
+      const { track, milestoneCount } = req.body;
+
+      if (!track || !['lower', 'upper'].includes(track)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid track. Must be "lower" or "upper"'
+        });
+      }
+
+      if (!milestoneCount || milestoneCount < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid milestone count'
+        });
+      }
+
+      const user = await User.findById(req.user.userId);
+      
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Check if user can claim this milestone
+      const milestones = user.checkMilestoneBonus();
+      
+      // Validate track accessibility
+      if (track === 'upper' && !milestones.canClaimUpper) {
+        return res.status(403).json({
+          success: false,
+          message: 'Upper track milestones are only available for Bronze level and above'
+        });
+      }
+
+      // Find the milestone to claim
+      const trackMilestones = track === 'lower' ? milestones.lowerMilestones : milestones.upperMilestones;
+      const milestone = trackMilestones.find(m => m.count === milestoneCount);
+
+      if (!milestone) {
+        return res.status(404).json({
+          success: false,
+          message: 'Milestone not found or not yet achieved'
+        });
+      }
+
+      // Check if already claimed
+      const trackData = track === 'lower' 
+        ? user.milestoneTracking.lowerTrack 
+        : user.milestoneTracking.upperTrack;
+
+      if (trackData.claimedMilestones.includes(milestoneCount)) {
+        return res.status(400).json({
+          success: false,
+          message: 'This milestone has already been claimed'
+        });
+      }
+
+      // Award the bonus
+      user.walletBalance = (user.walletBalance || 0) + milestone.bonus;
+      user.totalEarnings = (user.totalEarnings || 0) + milestone.bonus;
+
+      // Update milestone tracking
+      trackData.lastMilestoneClaimed = milestoneCount;
+      trackData.claimedMilestones.push(milestoneCount);
+      user.markModified('milestoneTracking');
+
+      await user.save();
+
+      // Create transaction record
+      await Transaction.create({
+        userId: user._id,
+        type: 'MILESTONE_BONUS',
+        subType: track.toUpperCase(),
+        amount: milestone.bonus,
+        status: 'COMPLETED',
+        description: `${track === 'lower' ? 'Lower' : 'Upper'} track milestone bonus for ${milestoneCount} referral deposits`
+      });
+
+      logger.info(`User ${user.email} claimed ${track} milestone ${milestoneCount} for $${milestone.bonus}`);
+
+      res.json({
+        success: true,
+        message: `Milestone bonus of $${milestone.bonus} claimed successfully!`,
+        data: {
+          bonusAmount: milestone.bonus,
+          newBalance: user.walletBalance,
+          track,
+          milestoneCount
+        }
+      });
+
+    } catch (error) {
+      logger.error('Claim milestone error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error claiming milestone bonus'
+      });
+    }
+  }
 }
 
 module.exports = UserController;

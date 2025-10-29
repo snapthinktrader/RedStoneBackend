@@ -60,4 +60,22 @@ router.get('/settings', auth, UserController.getSettings);
 // @access  Private
 router.put('/settings', auth, UserController.updateSettings);
 
+// @route   GET /api/users/milestones
+// @desc    Get user's milestone progress (dual-track system)
+// @access  Private
+router.get('/milestones', auth, UserController.getMilestones);
+
+// @route   POST /api/users/claim-milestone
+// @desc    Claim milestone bonus
+// @access  Private
+router.post('/claim-milestone', [
+  auth,
+  body('track')
+    .isIn(['lower', 'upper'])
+    .withMessage('Track must be either "lower" or "upper"'),
+  body('milestoneCount')
+    .isInt({ min: 1 })
+    .withMessage('Milestone count must be a positive integer'),
+], UserController.claimMilestone);
+
 module.exports = router;

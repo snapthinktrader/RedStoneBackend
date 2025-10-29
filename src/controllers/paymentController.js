@@ -2,16 +2,19 @@ const WalletService = require('../services/walletService');
 const BlockchainMonitorService = require('../services/blockchainMonitorService');
 const FundSweepService = require('../services/FundSweepService');
 const CompleteAutoSweepService = require('../services/CompleteAutoSweepService');
+const WithdrawalValidationService = require('../services/withdrawalValidationService');
+const ReusableWalletService = require('../services/reusableWalletService');
 const Deposit = require('../models/Deposit');
 const Withdrawal = require('../models/Withdrawal');
 const User = require('../models/User');
+const AdminSettings = require('../models/AdminSettings');
 
 class PaymentController {
     /**
-     * Create a new deposit request with enhanced auto-sweep
+     * Create a new deposit request with reusable wallet (saves network fees)
      */
     static async createDeposit(req, res) {
-        const autoSweepService = new CompleteAutoSweepService();
+        const reusableWalletService = new ReusableWalletService();
         
         try {
             const { amount, network = 'tron' } = req.body;
@@ -53,18 +56,37 @@ class PaymentController {
                 });
             }
 
-            // Create deposit with enhanced auto-sweep support
-            const deposit = await autoSweepService.createDepositWithAutoSweep({
+            // Get or create reusable wallet (saves fees by reusing same wallet)
+            const walletInfo = await reusableWalletService.getOrCreateDepositWallet(userId);
+
+            // Create deposit record
+            const expiresAt = new Date();
+            expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour expiry
+
+            const deposit = new Deposit({
                 userId,
+                address: walletInfo.address,
                 network,
-                amount,
                 expectedAmount: amount,
-                addressIndex: Date.now() // Use timestamp as unique index
+                status: 'PENDING',
+                expiresAt,
+                isHDWallet: true,
+                isReusableWallet: true, // New flag
+                walletDepositNumber: walletInfo.depositCount + 1, // Track which deposit number this is for the wallet
+                metadata: {
+                    walletIsNew: walletInfo.isNew,
+                    walletDepositCount: walletInfo.depositCount,
+                    depositCycleMax: 40
+                }
             });
+
+            await deposit.save();
 
             res.status(201).json({
                 success: true,
-                message: 'Enhanced HD wallet address generated successfully with auto-sweep',
+                message: walletInfo.isNew 
+                    ? 'New reusable wallet created for your deposits'
+                    : `Using your existing wallet (Deposit ${walletInfo.depositCount + 1}/40)`,
                 data: {
                     depositId: deposit._id,
                     address: deposit.address,
@@ -73,14 +95,20 @@ class PaymentController {
                     qrCodeData: `${deposit.address}?amount=${amount}`,
                     expiresAt: deposit.expiresAt,
                     requiredConfirmations: deposit.requiredConfirmations,
-                    isHDWallet: deposit.isHDWallet,
-                    autoSweepEnabled: true,
-                    sweepStatus: deposit.sweepStatus,
+                    isReusableWallet: true,
+                    walletInfo: {
+                        isNew: walletInfo.isNew,
+                        depositCount: walletInfo.depositCount,
+                        depositsRemaining: 40 - walletInfo.depositCount,
+                        message: walletInfo.isNew 
+                            ? 'This wallet will be reused for your next 40 deposits to save network fees'
+                            : `This wallet can accept ${40 - walletInfo.depositCount} more deposits before rotation`
+                    },
                     instructions: {
-                        message: 'Send USDT to this address. Funds will be automatically swept to your main wallet.',
+                        message: 'Send USDT to this address. Your wallet is reused to minimize network fees.',
                         usdtContract: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
                         network: 'TRON TRC-20',
-                        autoSweep: 'Enabled - funds will be automatically transferred'
+                        feeOptimization: 'Wallet reuse enabled - saves gas fees'
                     }
                 }
             });
@@ -195,10 +223,10 @@ class PaymentController {
             const userId = req.user.id;
 
             // Validate input
-            if (!amount || amount < 10) {
+            if (!amount || amount <= 0) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Minimum withdrawal amount is $10 USDT'
+                    message: 'Please enter a valid amount'
                 });
             }
 
@@ -211,14 +239,21 @@ class PaymentController {
 
             const walletService = new WalletService();
         
-        if (!walletService.validateAddress(toAddress, network)) {
+            if (!walletService.validateAddress(toAddress, network)) {
                 return res.status(400).json({
                     success: false,
                     message: 'Invalid withdrawal address'
                 });
             }
 
-            // Get user and check balance
+            // Validate withdrawal based on tier rules
+            const validation = await WithdrawalValidationService.validateWithdrawal(userId, amount);
+            
+            if (!validation.success) {
+                return res.status(400).json(validation);
+            }
+
+            // Get user
             const user = await User.findById(userId);
             if (!user) {
                 return res.status(404).json({
@@ -227,33 +262,9 @@ class PaymentController {
                 });
             }
 
-            if (user.walletBalance < amount) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Insufficient balance',
-                    currentBalance: user.walletBalance,
-                    requestedAmount: amount
-                });
-            }
-
-            // Check for existing pending withdrawals
-            const existingWithdrawal = await Withdrawal.findOne({
-                userId,
-                status: { $in: ['PENDING_APPROVAL', 'APPROVED', 'PROCESSING', 'SIGNED', 'BROADCASTED'] }
-            });
-
-            if (existingWithdrawal) {
-                return res.status(409).json({
-                    success: false,
-                    message: 'You have a pending withdrawal. Please wait for it to complete.',
-                    existingWithdrawal: {
-                        id: existingWithdrawal._id,
-                        amount: existingWithdrawal.amount,
-                        status: existingWithdrawal.status,
-                        createdAt: existingWithdrawal.createdAt
-                    }
-                });
-            }
+            // Get settings for network fee
+            const settings = await AdminSettings.getCurrentSettings();
+            const networkFee = settings.withdrawalTierRules.networkFee;
 
             // Create withdrawal request
             const withdrawalRequest = await walletService.createWithdrawalRequest(
@@ -263,17 +274,26 @@ class PaymentController {
                 network
             );
 
+            // Calculate net amount after network fee
+            const netAmount = amount - networkFee;
+
             // Save to database
             const withdrawal = new Withdrawal({
                 userId,
                 toAddress,
                 network,
                 amount,
-                fees: withdrawalRequest.fees,
+                actualAmount: netAmount,
+                fees: {
+                    ...withdrawalRequest.fees,
+                    usd: networkFee,
+                    network: networkFee
+                },
                 userNotes,
                 metadata: {
                     ...withdrawalRequest.metadata,
                     userBalance: user.walletBalance,
+                    tierInfo: validation.details,
                     requestIP: req.ip,
                     userAgent: req.get('User-Agent')
                 }
@@ -283,16 +303,18 @@ class PaymentController {
 
             res.status(201).json({
                 success: true,
-                message: 'Withdrawal request created successfully',
+                message: 'Withdrawal request created successfully. Pending admin approval.',
                 data: {
                     withdrawalId: withdrawal._id,
                     amount: withdrawal.amount,
+                    networkFee: networkFee,
+                    netAmount: netAmount,
                     toAddress: withdrawal.toAddress,
                     network: withdrawal.network,
                     status: withdrawal.status,
-                    estimatedFees: withdrawal.fees,
-                    netAmount: withdrawal.calculateNetAmount(),
-                    createdAt: withdrawal.createdAt
+                    tierInfo: validation.details,
+                    createdAt: withdrawal.createdAt,
+                    estimatedProcessingTime: validation.details.processingTime
                 }
             });
         } catch (error) {
@@ -393,6 +415,67 @@ class PaymentController {
             res.status(500).json({
                 success: false,
                 message: 'Failed to get withdrawal history',
+                error: error.message
+            });
+        }
+    };
+
+    /**
+     * Get withdrawal limits for current user
+     */
+    static async getWithdrawalLimits(req, res) {
+        try {
+            const userId = req.user.id;
+            
+            const limitsData = await WithdrawalValidationService.getWithdrawalLimits(userId);
+            
+            if (!limitsData.success) {
+                return res.status(400).json(limitsData);
+            }
+
+            res.json(limitsData);
+        } catch (error) {
+            console.error('Get withdrawal limits error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get withdrawal limits',
+                error: error.message
+            });
+        }
+    };
+
+    /**
+     * Get reusable wallet information
+     */
+    static async getReusableWalletInfo(req, res) {
+        try {
+            const userId = req.user.id;
+            const reusableWalletService = new ReusableWalletService();
+            
+            const walletInfo = await reusableWalletService.getActiveWalletInfo(userId);
+            
+            if (!walletInfo) {
+                return res.json({
+                    success: true,
+                    data: {
+                        hasWallet: false,
+                        message: 'No active wallet. One will be created on your first deposit.'
+                    }
+                });
+            }
+
+            res.json({
+                success: true,
+                data: {
+                    hasWallet: true,
+                    ...walletInfo
+                }
+            });
+        } catch (error) {
+            console.error('Get reusable wallet info error:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to get wallet information',
                 error: error.message
             });
         }

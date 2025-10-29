@@ -90,6 +90,49 @@ const adminSettingsSchema = new mongoose.Schema({
         default: 10000
     },
     
+    // Withdrawal tier rules (based on user level)
+    withdrawalTierRules: {
+        processingTimeMin: {
+            type: Number,
+            default: 1 // hours
+        },
+        processingTimeMax: {
+            type: Number,
+            default: 48 // hours
+        },
+        minimumWithdrawal: {
+            type: Number,
+            default: 100 // USD
+        },
+        networkFee: {
+            type: Number,
+            default: 5 // USD
+        },
+        tiers: {
+            // Basic, Bronze, Silver (Levels 1-3)
+            basic: {
+                firstWithdrawal: { type: Number, default: 100 },
+                secondWithdrawal: { type: Number, default: 300 },
+                thirdWithdrawal: { type: Number, default: 300 },
+                waitingPeriodDays: { type: Number, default: 7 }, // Days after 2nd withdrawal
+            },
+            // Gold, Platinum, Diamond (Levels 4-6)
+            premium: {
+                firstWithdrawal: { type: Number, default: 100 },
+                secondWithdrawal: { type: Number, default: 300 },
+                thirdWithdrawal: { type: Number, default: 500 },
+                waitingPeriodDays: { type: Number, default: 7 }, // Days after 2nd withdrawal
+            },
+            // Ascendant, Radiant (Levels 7-8)
+            elite: {
+                firstWithdrawal: { type: Number, default: 100 },
+                secondWithdrawal: { type: Number, default: 300 },
+                thirdWithdrawal: { type: Number, default: 500 },
+                waitingPeriodDays: { type: Number, default: 7 }, // Days after 2nd withdrawal
+            }
+        }
+    },
+    
     // Email configuration
     smtpHost: {
         type: String,

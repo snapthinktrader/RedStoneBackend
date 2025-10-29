@@ -138,6 +138,75 @@ const userSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Indirect referrals cannot be negative'],
   },
+  // Withdrawal tracking
+  withdrawalCount: {
+    type: Number,
+    default: 0,
+    min: [0, 'Withdrawal count cannot be negative'],
+  },
+  lastSuccessfulWithdrawal: {
+    type: Date,
+    default: null,
+  },
+  totalWithdrawn: {
+    type: Number,
+    default: 0.00,
+    min: [0, 'Total withdrawn cannot be negative'],
+  },
+  // Reusable deposit wallet (saves network fees)
+  currentDepositWallet: {
+    address: {
+      type: String,
+      default: null
+    },
+    privateKey: {
+      type: String,
+      default: null,
+      select: false // Don't include in queries by default for security
+    },
+    depositCount: {
+      type: Number,
+      default: 0
+    },
+    totalReceived: {
+      type: Number,
+      default: 0.00
+    },
+    createdAt: {
+      type: Date,
+      default: null
+    },
+    lastUsedAt: {
+      type: Date,
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    }
+  },
+  // Wallet rotation tracking
+  walletRotationHistory: [{
+    address: String,
+    depositCount: Number,
+    totalReceived: Number,
+    createdAt: Date,
+    rotatedAt: Date,
+    finalBalance: Number
+  }],
+  // Dual milestone tracking (separate lower and upper tracks)
+  milestoneTracking: {
+    lowerTrack: {
+      count: { type: Number, default: 0 }, // Referrals with deposits $0-$49
+      lastMilestoneClaimed: { type: Number, default: 0 },
+      claimedMilestones: [{ milestone: Number, claimedAt: Date, bonus: Number }]
+    },
+    upperTrack: {
+      count: { type: Number, default: 0 }, // Referrals with deposits $50+
+      lastMilestoneClaimed: { type: Number, default: 0 },
+      claimedMilestones: [{ milestone: Number, claimedAt: Date, bonus: Number }]
+    }
+  },
   refreshTokens: [{
     token: String,
     createdAt: {
@@ -304,13 +373,16 @@ userSchema.methods.getCommissionRate = function() {
 };
 
 /**
- * Get milestone bonuses based on referral count
- * Returns the bonus amount for reaching a referral milestone
- * Based on recheck.txt documents 11-12 (Basic level vs Bronze+ level bonuses)
+ * Get milestone bonuses based on referral count and track type
+ * Dual-track system: Lower ($0-$49) and Upper ($50+)
+ * Based on recheck.txt documents 11-12
+ * @param {Number} referralCount - Referral count for specific track
+ * @param {String} track - 'lower' or 'upper'
+ * @returns {Number} - Bonus amount
  */
-userSchema.methods.getMilestoneBonus = function(referralCount) {
-  // Basic level bonuses (recheck.txt document 11)
-  const basicLevelBonuses = {
+userSchema.methods.getMilestoneBonus = function(referralCount, track = 'lower') {
+  // Lower track bonuses ($0-$49 deposits) - Always available
+  const lowerTrackBonuses = {
     3: 15,      // $15 for 3 referrals
     10: 30,     // $30 for 10 referrals
     15: 45,     // $45 for 15 referrals
@@ -321,8 +393,8 @@ userSchema.methods.getMilestoneBonus = function(referralCount) {
     1000: 3500  // $3500 for 1000 referrals
   };
   
-  // Bronze+ level bonuses (recheck.txt document 12)
-  const bronzePlusBonuses = {
+  // Upper track bonuses ($50+ deposits) - Only for Bronze+ levels
+  const upperTrackBonuses = {
     3: 50,      // $50 for 3 referrals
     10: 100,    // $100 for 10 referrals
     15: 150,    // $150 for 15 referrals
@@ -333,29 +405,95 @@ userSchema.methods.getMilestoneBonus = function(referralCount) {
     1000: 25000 // $25000 for 1000 referrals
   };
   
-  // Use Bronze+ bonuses if deposit level is Bronze (2) or higher, otherwise use Basic
-  const bonuses = this.currentLevel >= 2 ? bronzePlusBonuses : basicLevelBonuses;
-  return bonuses[referralCount] || 0;
+  if (track === 'upper') {
+    // Upper bonuses only for Bronze+ (level 2+)
+    return this.currentLevel >= 2 ? (upperTrackBonuses[referralCount] || 0) : 0;
+  }
+  
+  // Lower bonuses available for all levels
+  return lowerTrackBonuses[referralCount] || 0;
 };
 
 /**
- * Check if user qualifies for a milestone bonus
- * @param {Number} referralCount - Current direct referral count
- * @param {Number} previousCount - Previous direct referral count
- * @returns {Object|null} - {bonus: Number, milestone: Number} or null
+ * Check if user qualifies for milestone bonuses (dual-track system)
+ * Tracks lower ($0-$49) and upper ($50+) milestones separately
+ * @returns {Object} - { lowerMilestones: Array, upperMilestones: Array, canClaimUpper: Boolean }
  */
-userSchema.methods.checkMilestoneBonus = function(referralCount, previousCount = 0) {
+userSchema.methods.checkMilestoneBonus = function() {
   const milestones = [3, 10, 15, 25, 50, 100, 500, 1000];
   
-  // Find if user crossed a milestone
+  // Initialize tracking if not exists
+  if (!this.milestoneTracking) {
+    this.milestoneTracking = {
+      lowerTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] },
+      upperTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] }
+    };
+  }
+  
+  const lowerCount = this.milestoneTracking.lowerTrack.count || 0;
+  const upperCount = this.milestoneTracking.upperTrack.count || 0;
+  const lowerLastClaimed = this.milestoneTracking.lowerTrack.lastMilestoneClaimed || 0;
+  const upperLastClaimed = this.milestoneTracking.upperTrack.lastMilestoneClaimed || 0;
+  
+  const result = {
+    lowerMilestones: [],
+    upperMilestones: [],
+    canClaimUpper: this.currentLevel >= 2 // Bronze+ can claim upper
+  };
+  
+  // Check lower track milestones (always claimable)
   for (const milestone of milestones) {
-    if (referralCount >= milestone && previousCount < milestone) {
-      const bonus = this.getMilestoneBonus(milestone);
-      return { bonus, milestone };
+    if (lowerCount >= milestone && lowerLastClaimed < milestone) {
+      const bonus = this.getMilestoneBonus(milestone, 'lower');
+      result.lowerMilestones.push({
+        milestone,
+        bonus,
+        track: 'lower',
+        count: lowerCount,
+        claimable: true
+      });
     }
   }
   
-  return null;
+  // Check upper track milestones (only claimable for Bronze+)
+  for (const milestone of milestones) {
+    if (upperCount >= milestone && upperLastClaimed < milestone) {
+      const bonus = this.getMilestoneBonus(milestone, 'upper');
+      result.upperMilestones.push({
+        milestone,
+        bonus,
+        track: 'upper',
+        count: upperCount,
+        claimable: this.currentLevel >= 2, // Only Bronze+ can claim
+        locked: this.currentLevel < 2
+      });
+    }
+  }
+  
+  return result;
+};
+
+/**
+ * Update milestone tracking when referral makes a deposit
+ * @param {Number} depositAmount - Amount deposited by referral
+ */
+userSchema.methods.updateMilestoneTracking = function(depositAmount) {
+  // Initialize if not exists
+  if (!this.milestoneTracking) {
+    this.milestoneTracking = {
+      lowerTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] },
+      upperTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] }
+    };
+  }
+  
+  // Categorize deposit: Lower ($0-$49) or Upper ($50+)
+  if (depositAmount < 50) {
+    this.milestoneTracking.lowerTrack.count += 1;
+    console.log(`   📊 Lower track milestone: ${this.milestoneTracking.lowerTrack.count} referrals ($0-$49)`);
+  } else {
+    this.milestoneTracking.upperTrack.count += 1;
+    console.log(`   📊 Upper track milestone: ${this.milestoneTracking.upperTrack.count} referrals ($50+)`);
+  }
 };
 
 /**

@@ -19,8 +19,8 @@ const createDepositValidation = [
 
 const createWithdrawalValidation = [
     body('amount')
-        .isFloat({ min: 10 })
-        .withMessage('Amount must be at least $10 USDT'),
+        .isFloat({ min: 1 })
+        .withMessage('Please enter a valid amount'),
     body('toAddress')
         .notEmpty()
         .withMessage('Withdrawal address is required')
@@ -103,6 +103,16 @@ router.get('/withdrawals/:withdrawalId',
 router.get('/withdrawals', 
     auth, 
     PaymentController.getWithdrawalHistory
+);
+
+router.get('/withdrawal-limits', 
+    auth, 
+    PaymentController.getWithdrawalLimits
+);
+
+router.get('/reusable-wallet-info', 
+    auth, 
+    PaymentController.getReusableWalletInfo
 );
 
 // Auto-sweep routes

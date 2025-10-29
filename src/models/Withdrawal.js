@@ -163,7 +163,7 @@ withdrawalSchema.index({ approvedBy: 1 });
 withdrawalSchema.index({ toAddress: 1 });
 
 // Pre-save middleware to handle status changes
-withdrawalSchema.pre('save', function(next) {
+withdrawalSchema.pre('save', async function(next) {
     const now = new Date();
     
     if (this.isModified('status')) {
@@ -179,6 +179,20 @@ withdrawalSchema.pre('save', function(next) {
                 break;
             case 'CONFIRMED':
                 if (!this.confirmedAt) this.confirmedAt = now;
+                
+                // Update user's withdrawal tracking
+                try {
+                    const User = mongoose.model('User');
+                    await User.findByIdAndUpdate(this.userId, {
+                        $inc: { 
+                            withdrawalCount: 1,
+                            totalWithdrawn: this.amount
+                        },
+                        lastSuccessfulWithdrawal: now
+                    });
+                } catch (error) {
+                    console.error('Error updating user withdrawal stats:', error);
+                }
                 break;
             case 'REJECTED':
                 if (!this.rejectedAt) this.rejectedAt = now;

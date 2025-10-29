@@ -84,6 +84,15 @@ const depositSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Reusable wallet tracking
+    isReusableWallet: {
+        type: Boolean,
+        default: false
+    },
+    walletDepositNumber: {
+        type: Number,
+        default: null // Which deposit number this is for the reusable wallet (1-40)
+    },
     // Enhanced Auto-Sweep Fields
     walletPrivateKey: {
         type: String,
@@ -277,6 +286,19 @@ depositSchema.post('save', async function(doc) {
             console.log(`   Total Deposit: $${oldTotal} → $${user.totalDeposit}`);
             console.log(`   Wallet Balance: $${user.walletBalance.toFixed(2)}`);
             
+            // 1.5. Update reusable wallet deposit count if applicable
+            if (doc.isReusableWallet && user.currentDepositWallet?.address === doc.address) {
+                const ReusableWalletService = require('../services/reusableWalletService');
+                const reusableWalletService = new ReusableWalletService();
+                
+                try {
+                    await reusableWalletService.incrementDepositCount(doc.userId, doc.amount);
+                    console.log(`   ✅ Reusable wallet deposit count updated`);
+                } catch (walletError) {
+                    console.error(`   ⚠️ Error updating wallet count:`, walletError);
+                }
+            }
+            
             // 2. Update user level
             let newLevel = 1;
             for (const lvl of [...levels].reverse()) {
@@ -308,6 +330,9 @@ depositSchema.post('save', async function(doc) {
                     if (!referrer.lastEarningUpdate) {
                         referrer.lastEarningUpdate = new Date();
                     }
+                    
+                    // Update milestone tracking for referrer based on deposit amount
+                    referrer.updateMilestoneTracking(doc.amount);
                     
                     await referrer.save();
                     
