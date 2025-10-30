@@ -263,6 +263,18 @@ class CompleteAutoSweepService {
                     status: 'COMPLETED'
                 });
                 
+                // ✅ Increment system wallet deposit count (if using reusable wallet)
+                if (deposit.isReusableWallet && deposit.isSystemWallet) {
+                    try {
+                        const ReusableWalletService = require('./reusableWalletService');
+                        const reusableWalletService = new ReusableWalletService();
+                        await reusableWalletService.incrementDepositCount(deposit.actualAmount || deposit.expectedAmount);
+                        console.log(`📊 System wallet deposit count incremented`);
+                    } catch (countError) {
+                        console.error(`⚠️ Failed to increment system wallet count:`, countError.message);
+                    }
+                }
+                
                 console.log(`🎉 Deposit ${deposit._id} auto-sweep completed successfully!`);
             } else {
                 throw new Error(`USDT sweep failed: ${sweepResult.error}`);

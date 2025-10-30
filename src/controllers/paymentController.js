@@ -56,8 +56,8 @@ class PaymentController {
                 });
             }
 
-            // Get or create reusable wallet (saves fees by reusing same wallet)
-            const walletInfo = await reusableWalletService.getOrCreateDepositWallet(userId);
+            // Get or create system-wide reusable wallet (shared by all users)
+            const walletInfo = await reusableWalletService.getOrCreateDepositWallet();
 
             // Create deposit record
             const expiresAt = new Date();
@@ -72,12 +72,14 @@ class PaymentController {
                 status: 'PENDING',
                 expiresAt,
                 isHDWallet: true,
-                isReusableWallet: true, // New flag
+                isReusableWallet: true, // System-wide reusable wallet
+                isSystemWallet: true, // New flag indicating system-wide wallet
                 walletDepositNumber: walletInfo.depositCount + 1, // Track which deposit number this is for the wallet
                 metadata: {
                     walletIsNew: walletInfo.isNew,
-                    walletDepositCount: walletInfo.depositCount,
-                    depositCycleMax: 40
+                    systemWalletDepositCount: walletInfo.depositCount,
+                    depositCycleMax: 40,
+                    isSystemWallet: true
                 }
             });
 
@@ -86,8 +88,8 @@ class PaymentController {
             res.status(201).json({
                 success: true,
                 message: walletInfo.isNew 
-                    ? 'New reusable wallet created for your deposits'
-                    : `Using your existing wallet (Deposit ${walletInfo.depositCount + 1}/40)`,
+                    ? 'New system deposit wallet created'
+                    : `Using system wallet (Deposit ${walletInfo.depositCount + 1}/40)`,
                 data: {
                     depositId: deposit._id,
                     address: deposit.address,
@@ -101,15 +103,17 @@ class PaymentController {
                         isNew: walletInfo.isNew,
                         depositCount: walletInfo.depositCount,
                         depositsRemaining: 40 - walletInfo.depositCount,
+                        isSystemWallet: true,
                         message: walletInfo.isNew 
-                            ? 'This wallet will be reused for your next 40 deposits to save network fees'
-                            : `This wallet can accept ${40 - walletInfo.depositCount} more deposits before rotation`
+                            ? 'New system wallet created - will handle up to 40 deposits'
+                            : `System wallet in use (${walletInfo.depositCount}/40 deposits, ${40 - walletInfo.depositCount} remaining)`
                     },
                     instructions: {
-                        message: 'Send USDT to this address. Your wallet is reused to minimize network fees.',
+                        message: 'Send USDT (TRC-20) to this address. System wallet optimizes gas fees across all users.',
                         usdtContract: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
                         network: 'TRON TRC-20',
-                        feeOptimization: 'Wallet reuse enabled - saves gas fees'
+                        feeOptimization: 'System-wide wallet reuse - optimized gas fees',
+                        autoRotation: 'Wallet auto-rotates after 40 deposits with auto-sweep to main wallet'
                     }
                 }
             });
@@ -446,21 +450,21 @@ class PaymentController {
     };
 
     /**
-     * Get reusable wallet information
+     * Get system-wide reusable wallet information
      */
     static async getReusableWalletInfo(req, res) {
         try {
-            const userId = req.user.id;
             const reusableWalletService = new ReusableWalletService();
             
-            const walletInfo = await reusableWalletService.getActiveWalletInfo(userId);
+            const walletInfo = await reusableWalletService.getActiveWalletInfo();
             
             if (!walletInfo) {
                 return res.json({
                     success: true,
                     data: {
                         hasWallet: false,
-                        message: 'No active wallet. One will be created on your first deposit.'
+                        message: 'No active system wallet. One will be created on the first deposit.',
+                        isSystemWallet: true
                     }
                 });
             }
@@ -469,7 +473,9 @@ class PaymentController {
                 success: true,
                 data: {
                     hasWallet: true,
-                    ...walletInfo
+                    isSystemWallet: true,
+                    ...walletInfo,
+                    message: `System wallet active with ${walletInfo.depositCount}/40 deposits (${walletInfo.depositsRemaining} remaining before rotation)`
                 }
             });
         } catch (error) {
