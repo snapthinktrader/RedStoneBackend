@@ -268,13 +268,21 @@ router.get('/user-referrals', auth, async (req, res) => {
 
       const earnings = commissionData[0] || { totalEarnings: 0, transactionCount: 0, lastEarning: null };
 
+      // Calculate referral's daily earnings (what they earn per day from their balance)
+      const refUserModel = await User.findById(referral._id);
+      const referralDailyEarnings = refUserModel ? refUserModel.getDailyEarnings() : 0;
+
+      // Calculate expected daily commission from this referral (for display)
+      const user = await User.findById(req.user.userId);
+      const myCommissionFromThisUser = user ? (referralDailyEarnings * user.commissionRate) : 0;
+
       return {
         id: referral._id.toString(),
         referrerId: req.user.userId,
         refereeId: referral._id.toString(),
         refereeName: referral.name,
         refereeEmail: referral.email,
-        commissionEarned: earnings.totalEarnings,
+        commissionEarned: earnings.totalEarnings, // Total historical commission
         level: 1, // Direct referral
         joinedAt: referral.createdAt.toISOString(),
         refereeDeposit: referral.totalDeposit,
@@ -282,6 +290,9 @@ router.get('/user-referrals', auth, async (req, res) => {
         // Additional data for enhanced display
         walletBalance: referral.walletBalance,
         currentLevel: referral.currentLevel,
+        // NEW: Daily earnings data (shows real-time earning potential)
+        dailyEarnings: referralDailyEarnings, // What this referral earns per day
+        myDailyCommission: myCommissionFromThisUser, // What you earn per day from them
         myEarningsFromThisUser: {
           total: earnings.totalEarnings,
           commissionCount: earnings.transactionCount,
@@ -352,8 +363,9 @@ router.get('/stats', auth, async (req, res) => {
 
     const indirectReferralCount = indirectReferralData[0]?.total || 0;
 
-    // Get milestone bonuses information
-    const milestones = JSON.parse(process.env.MILESTONE_BONUSES || '{"10":100,"25":300,"50":750,"100":2000,"200":5000}');
+  // Get milestone bonuses information
+  // Include 3 referrals -> $15 by default so the small-bronze milestone is visible
+  const milestones = JSON.parse(process.env.MILESTONE_BONUSES || '{"3":15,"10":100,"25":300,"50":750,"100":2000,"200":5000}');
     
     // Find next milestone
     let nextMilestone = null;
