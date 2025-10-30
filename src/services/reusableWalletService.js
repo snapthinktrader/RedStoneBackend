@@ -1,4 +1,4 @@
-const TronWeb = require('tronweb');
+const { TronWeb } = require('tronweb');
 const User = require('../models/User');
 const Deposit = require('../models/Deposit');
 const AdminSettings = require('../models/AdminSettings');

@@ -4,7 +4,7 @@ const FundSweepService = require('../services/FundSweepService');
 const Deposit = require('../models/Deposit');
 const Withdrawal = require('../models/Withdrawal');
 const User = require('../models/User');
-const TronWeb = require('tronweb');
+const { TronWeb } = require('tronweb');
 const logger = require('../utils/logger');
 
 class AdminPaymentController {
