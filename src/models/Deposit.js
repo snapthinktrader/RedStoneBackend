@@ -66,15 +66,18 @@ const depositSchema = new mongoose.Schema({
     },
     addressIndex: {
         type: Number,
-        required: true
+        required: false, // Not required for reusable wallets
+        default: null
     },
     derivationPath: {
         type: String,
-        required: true
+        required: false, // Not required for reusable wallets
+        default: null
     },
     publicKey: {
         type: String,
-        required: true
+        required: false, // Not required for reusable wallets
+        default: null
     },
     isHDWallet: {
         type: Boolean,

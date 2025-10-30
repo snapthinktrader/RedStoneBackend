@@ -67,6 +67,7 @@ class PaymentController {
                 userId,
                 address: walletInfo.address,
                 network,
+                amount: amount, // Required field
                 expectedAmount: amount,
                 status: 'PENDING',
                 expiresAt,
