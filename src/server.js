@@ -27,6 +27,7 @@ const apkManagementRoutes = require('./routes/apkManagement');
 console.log('🟢 Chunked upload routes loaded in server.js');
 const { router: autoSweepRoutes } = require('./routes/autoSweepSimple');
 const CompleteAutoSweepService = require('./services/CompleteAutoSweepService');
+const keepAliveService = require('./services/keepAliveService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -144,6 +145,13 @@ const startServer = async () => {
       logger.info('⏸️ Auto-sweep service is disabled.');
     }
 
+    // Start Keep-Alive Service (prevents Render free tier from sleeping)
+    if (process.env.NODE_ENV === 'production') {
+      keepAliveService.start();
+    } else {
+      logger.info('⏸️ Keep-alive service disabled in development');
+    }
+
     // Start server
     app.listen(PORT, () => {
       logger.info(`🚀 RedStone Backend Server is running on port ${PORT}`);
@@ -162,6 +170,7 @@ const startServer = async () => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
+  keepAliveService.stop();
   const { mongoose } = require('./config/database');
   await mongoose.connection.close();
   process.exit(0);
@@ -169,6 +178,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully');
+  keepAliveService.stop();
   const { mongoose } = require('./config/database');
   await mongoose.connection.close();
   process.exit(0);
