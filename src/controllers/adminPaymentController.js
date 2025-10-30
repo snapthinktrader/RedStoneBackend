@@ -4,6 +4,8 @@ const FundSweepService = require('../services/FundSweepService');
 const Deposit = require('../models/Deposit');
 const Withdrawal = require('../models/Withdrawal');
 const User = require('../models/User');
+const TronWeb = require('tronweb');
+const logger = require('../utils/logger');
 
 class AdminPaymentController {
     /**
@@ -155,55 +157,134 @@ class AdminPaymentController {
                 });
             }
 
-            // Use user's reusable deposit wallet for withdrawal (saves fees)
-            // Fallback to hot wallet if no reusable wallet exists
-            let hotWalletAddress = fromAddress;
-            
-            if (!hotWalletAddress && user.currentDepositWallet?.address && user.currentDepositWallet?.isActive) {
-                hotWalletAddress = user.currentDepositWallet.address;
-                console.log(`[Withdrawal] Using user's reusable wallet: ${hotWalletAddress}`);
-            } else if (!hotWalletAddress) {
-                hotWalletAddress = process.env.HOT_WALLET_ADDRESS;
-                console.log(`[Withdrawal] Using hot wallet: ${hotWalletAddress}`);
+            // Initialize TronWeb
+            const tronWeb = new TronWeb({
+                fullHost: process.env.TRON_NETWORK === 'mainnet' 
+                    ? 'https://api.trongrid.io' 
+                    : 'https://api.shasta.trongrid.io'
+            });
+
+            // USDT TRC-20 contract address
+            const usdtContractAddress = process.env.TRON_NETWORK === 'mainnet'
+                ? 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
+                : 'TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs';
+
+            let sourceWallet = null;
+            let sourcePrivateKey = null;
+            let sourceAddress = null;
+            let sourceBalance = 0;
+
+            // Check if reusable wallet exists and has sufficient USDT
+            if (user.currentDepositWallet?.address && user.currentDepositWallet?.privateKey) {
+                const reusableAddress = user.currentDepositWallet.address;
+                const reusablePrivateKey = user.currentDepositWallet.privateKey;
+                
+                try {
+                    // Check USDT balance in reusable wallet
+                    const contract = await tronWeb.contract().at(usdtContractAddress);
+                    const balance = await contract.balanceOf(reusableAddress).call();
+                    const balanceInUsdt = parseFloat(tronWeb.fromSun(balance));
+                    
+                    logger.info(`[Withdrawal] Reusable wallet ${reusableAddress} has ${balanceInUsdt} USDT`);
+                    
+                    if (balanceInUsdt >= withdrawal.actualAmount) {
+                        sourceAddress = reusableAddress;
+                        sourcePrivateKey = reusablePrivateKey;
+                        sourceBalance = balanceInUsdt;
+                        sourceWallet = 'reusable';
+                        logger.info(`[Withdrawal] Using reusable wallet (sufficient balance)`);
+                    } else {
+                        logger.warn(`[Withdrawal] Reusable wallet insufficient: ${balanceInUsdt} < ${withdrawal.actualAmount}`);
+                    }
+                } catch (error) {
+                    logger.error(`[Withdrawal] Error checking reusable wallet balance:`, error.message);
+                }
             }
+
+            // Fallback to fuel wallet if reusable wallet doesn't have enough
+            if (!sourceAddress) {
+                sourceAddress = process.env.FUEL_WALLET_ADDRESS;
+                sourcePrivateKey = process.env.FUEL_WALLET_PRIVATE_KEY;
+                sourceWallet = 'fuel';
+                logger.info(`[Withdrawal] Using fuel wallet: ${sourceAddress}`);
+                
+                if (!sourceAddress || !sourcePrivateKey) {
+                    return res.status(500).json({
+                        success: false,
+                        message: 'Withdrawal wallet not configured'
+                    });
+                }
+            }
+
+            // Set private key and execute transaction
+            tronWeb.setPrivateKey(sourcePrivateKey);
             
-            if (!hotWalletAddress) {
+            try {
+                const contract = await tronWeb.contract().at(usdtContractAddress);
+                const amountInSun = tronWeb.toSun(withdrawal.actualAmount);
+                
+                // Send USDT
+                const txResult = await contract.transfer(
+                    withdrawal.toAddress,
+                    amountInSun
+                ).send({
+                    feeLimit: 100_000_000, // 100 TRX fee limit
+                    callValue: 0
+                });
+
+                logger.info(`[Withdrawal] Transaction sent:`, txResult);
+
+                // Update withdrawal with transaction details
+                withdrawal.status = 'COMPLETED';
+                withdrawal.approvedBy = adminId;
+                withdrawal.approvedAt = new Date();
+                withdrawal.completedAt = new Date();
+                withdrawal.adminNotes = adminNotes;
+                withdrawal.fromAddress = sourceAddress;
+                withdrawal.txHash = txResult;
+                withdrawal.metadata = {
+                    ...withdrawal.metadata,
+                    sourceWallet,
+                    sourceBalance,
+                    executedAt: new Date(),
+                    transactionId: txResult
+                };
+
+                await withdrawal.save();
+
+                // Deduct from user balance
+                user.walletBalance -= withdrawal.amount;
+                await user.save();
+
+                logger.info(`[Withdrawal] Completed successfully: ${txResult}`);
+            } catch (txError) {
+                logger.error(`[Withdrawal] Transaction failed:`, txError);
+                
+                // Mark as failed
+                withdrawal.status = 'FAILED';
+                withdrawal.adminNotes = `${adminNotes}\n\nTransaction failed: ${txError.message}`;
+                await withdrawal.save();
+                
                 return res.status(500).json({
                     success: false,
-                    message: 'Withdrawal wallet not configured'
+                    message: 'Transaction failed',
+                    error: txError.message
                 });
             }
 
-            const unsignedTx = walletService.generateUnsignedTransaction(
-                withdrawal, 
-                hotWalletAddress
-            );
-
-            // Update withdrawal
-            withdrawal.status = 'APPROVED';
-            withdrawal.approvedBy = adminId;
-            withdrawal.approvedAt = new Date();
-            withdrawal.adminNotes = adminNotes;
-            withdrawal.fromAddress = hotWalletAddress;
-            withdrawal.unsignedTransaction = unsignedTx.unsignedTransaction;
-
-            await withdrawal.save();
-
-            // Deduct from user balance immediately (reserved)
-            user.walletBalance -= withdrawal.amount;
-            await user.save();
-
             res.json({
                 success: true,
-                message: 'Withdrawal approved successfully',
+                message: 'Withdrawal approved and executed successfully',
                 data: {
                     withdrawal: {
                         id: withdrawal._id,
                         status: withdrawal.status,
                         approvedAt: withdrawal.approvedAt,
-                        fromAddress: withdrawal.fromAddress
+                        completedAt: withdrawal.completedAt,
+                        fromAddress: withdrawal.fromAddress,
+                        txHash: withdrawal.txHash,
+                        sourceWallet: sourceWallet
                     },
-                    unsignedTransaction: unsignedTx,
                     userNewBalance: user.walletBalance
                 }
             });
