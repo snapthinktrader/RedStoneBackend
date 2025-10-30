@@ -24,7 +24,7 @@ const createWithdrawalValidation = [
     body('toAddress')
         .notEmpty()
         .withMessage('Withdrawal address is required')
-        .isLength({ min: 40, max: 42 })
+        .isLength({ min: 34, max: 42 })
         .withMessage('Invalid address format'),
     body('network')
         .optional()
