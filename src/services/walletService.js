@@ -237,6 +237,19 @@ class WalletService {
      * @returns {Object} Fee estimation
      */
     async estimateNetworkFees(network, type = 'token') {
+        // TRON network uses different fee structure
+        if (network === 'tron') {
+            return {
+                bandwidth: 345,
+                energy: 65000,
+                estimatedFeeTRX: '15', // ~15 TRX for TRC-20 transfer
+                estimatedFeeUSD: 5,
+                network: 'tron',
+                type
+            };
+        }
+
+        // EVM networks (Ethereum, BSC, Polygon)
         const baseFees = {
             ethereum: {
                 transfer: 21000,
