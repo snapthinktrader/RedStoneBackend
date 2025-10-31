@@ -3,13 +3,17 @@ const logger = require('../utils/logger');
 
 class EmailService {
   constructor() {
+    const smtpPort = parseInt(process.env.SMTP_PORT);
     this.transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
-      port: parseInt(process.env.SMTP_PORT),
-      secure: false, // true for 465, false for other ports
+      port: smtpPort,
+      secure: smtpPort === 465, // true for 465 (SSL), false for 587 (TLS)
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false, // Accept self-signed certificates for Render compatibility
       },
     });
 
