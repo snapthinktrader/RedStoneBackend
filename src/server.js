@@ -54,6 +54,8 @@ app.use(cors({
     'http://localhost:3000', // Alternative frontend port
     'https://redstoneadmin.vercel.app', // Admin panel
     'https://redstoneadmin.vercel.app/', // Admin panel with trailing slash
+    'https://www.redstonne.com', // New production domain
+    'https://redstonne.com', // Production domain without www
     '*', // Allow all origins for development - remove in production
   ],
   credentials: true,
