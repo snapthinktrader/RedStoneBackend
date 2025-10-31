@@ -165,7 +165,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
-                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
+                <img src="https://redstoneadmin.vercel.app/logo.png" alt="RedStone Logo" class="logo" onerror="this.style.display='none'" />
                 <h1>🔷 Welcome to RedStone</h1>
                 <p>Invest. Grow. Refer.</p>
             </div>
@@ -225,7 +225,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
-                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
+                <img src="https://redstoneadmin.vercel.app/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>🎉 Welcome to RedStone!</h1>
                 <p>Your crypto investment journey starts now</p>
             </div>
@@ -305,7 +305,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
-                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
+                <img src="https://redstoneadmin.vercel.app/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>🔐 Password Reset</h1>
                 <p>RedStone Security</p>
             </div>
@@ -361,7 +361,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
-                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
+                <img src="https://redstoneadmin.vercel.app/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>✅ Deposit Confirmed!</h1>
                 <p>Your investment is now active</p>
             </div>
