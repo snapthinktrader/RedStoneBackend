@@ -155,6 +155,7 @@ class EmailService {
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: linear-gradient(135deg, #E53935, #FFCDD2); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .logo { max-width: 120px; height: auto; margin-bottom: 15px; }
             .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
             .otp-code { display: inline-block; background: #E53935; color: white; padding: 20px 30px; font-size: 32px; font-weight: bold; letter-spacing: 8px; border-radius: 10px; margin: 20px 0; text-align: center; }
             .footer { text-align: center; margin-top: 30px; color: #666; font-size: 14px; }
@@ -164,6 +165,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
+                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>🔷 Welcome to RedStone</h1>
                 <p>Invest. Grow. Refer.</p>
             </div>
@@ -212,6 +214,7 @@ class EmailService {
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: linear-gradient(135deg, #E53935, #FFCDD2); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .logo { max-width: 120px; height: auto; margin-bottom: 15px; }
             .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
             .referral-code { background: #E53935; color: white; padding: 15px; text-align: center; border-radius: 5px; font-size: 18px; font-weight: bold; margin: 20px 0; }
             .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }
@@ -222,6 +225,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
+                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>🎉 Welcome to RedStone!</h1>
                 <p>Your crypto investment journey starts now</p>
             </div>
@@ -291,6 +295,7 @@ class EmailService {
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: #E53935; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .logo { max-width: 120px; height: auto; margin-bottom: 15px; }
             .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
             .button { display: inline-block; background: #E53935; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
             .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
@@ -300,6 +305,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
+                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>🔐 Password Reset</h1>
                 <p>RedStone Security</p>
             </div>
@@ -345,6 +351,7 @@ class EmailService {
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .logo { max-width: 120px; height: auto; margin-bottom: 15px; }
             .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
             .success-box { background: #d4edda; border: 1px solid #c3e6cb; padding: 20px; border-radius: 5px; margin: 20px 0; text-align: center; }
             .amount { font-size: 24px; font-weight: bold; color: #28a745; }
@@ -354,6 +361,7 @@ class EmailService {
     <body>
         <div class="container">
             <div class="header">
+                <img src="https://www.redstonne.com/logo.png" alt="RedStone Logo" class="logo" />
                 <h1>✅ Deposit Confirmed!</h1>
                 <p>Your investment is now active</p>
             </div>
