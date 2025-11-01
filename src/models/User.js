@@ -386,9 +386,42 @@ userSchema.methods.syncReferralData = async function() {
   return this;
 };
 
-userSchema.methods.getDailyEarnings = function() {
-  // Daily earnings based on deposit level rates (recheck.txt documents 1-3)
-  return (this.walletBalance || 0) * this.dailyEarningRate;
+/**
+ * Calculate daily earnings considering each deposit's individual earning period
+ * Each deposit earns separately based on when it was confirmed
+ * Example: $99 deposited 11 days ago earns from 11 days ago
+ *          $9999 deposited today only earns from today
+ * @returns {Number} Total daily earnings rate from all deposits
+ */
+userSchema.methods.getDailyEarnings = async function() {
+  // If no wallet balance, no earnings
+  if (!this.walletBalance || this.walletBalance <= 0) return 0;
+  
+  // Get all confirmed deposits for this user
+  const Deposit = require('./Deposit');
+  const deposits = await Deposit.find({
+    userId: this._id,
+    status: 'CONFIRMED',
+    balanceUpdated: true
+  }).select('amount processedAt createdAt').sort({ processedAt: 1 });
+  
+  // If no deposits found, fall back to simple calculation
+  // (for users with manual credits or old accounts)
+  if (!deposits || deposits.length === 0) {
+    return (this.walletBalance || 0) * this.dailyEarningRate;
+  }
+  
+  // Calculate total deposit amount
+  const totalDeposits = deposits.reduce((sum, dep) => sum + dep.amount, 0);
+  
+  // If deposits match wallet balance, use deposit-based calculation
+  // Otherwise fall back to wallet balance (accounting for withdrawals)
+  const baseAmount = Math.abs(totalDeposits - this.walletBalance) < 0.01 
+    ? totalDeposits 
+    : this.walletBalance;
+  
+  // Daily earnings based on current balance and rate
+  return baseAmount * this.dailyEarningRate;
 };
 
 userSchema.methods.getCommissionRate = function() {

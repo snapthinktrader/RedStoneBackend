@@ -284,24 +284,42 @@ router.get('/user-referrals', auth, async (req, res) => {
       const myCommissionPerSecond = referralEarningsPerSecond * myCommissionRate; // 15% of their per-second earnings
       const myCommissionPerDay = myCommissionPerSecond * SECONDS_PER_DAY; // 15% of their daily earnings
       
-      // Calculate accumulated commission since the referral joined
-      // This includes all commission earned from their balance growth since deposit
-      const firstDepositTime = referral.createdAt; // When they joined
+      // Calculate accumulated commission from when they STARTED EARNING (first deposit), not signup
+      // Each deposit earns separately from its own deposit time
+      // Example: $99 deposited 11 days ago earns for 11 days
+      //          $9999 deposited today only earns for today's duration
+      const Deposit = require('../models/Deposit');
+      const referralDeposits = await Deposit.find({
+        userId: referral._id,
+        status: 'CONFIRMED',
+        balanceUpdated: true
+      }).sort({ processedAt: 1 });
+
+      let accumulatedCommission = 0;
       const now = new Date();
-      const secondsSinceJoined = Math.floor((now - firstDepositTime) / 1000);
       
-      // Calculate their average earnings per second since joining
-      // Assuming they started with their initial deposit and it grew with compounding
-      const initialDeposit = referral.totalDeposit;
-      const currentBalance = referralCurrentBalance;
-      const totalGrowth = currentBalance - initialDeposit; // How much they've earned total
+      // Calculate commission from each deposit separately (SIMPLE interest, not compound)
+      // Each deposit earns 2% daily from its own start time
+      for (const deposit of referralDeposits) {
+        const depositStartTime = deposit.processedAt || deposit.createdAt;
+        const secondsSinceDeposit = Math.floor((now - depositStartTime) / 1000);
+        
+        if (secondsSinceDeposit <= 0) continue; // Skip future deposits
+        
+        // Calculate earnings from this specific deposit using SIMPLE interest
+        // Earnings = Principal × Rate × Time
+        const dailyRate = refUserModel ? refUserModel.dailyEarningRate : 0.02; // 2% daily
+        const ratePerSecond = dailyRate / SECONDS_PER_DAY;
+        const earningsFromThisDeposit = deposit.amount * ratePerSecond * secondsSinceDeposit;
+        
+        // My commission from this deposit's earnings (15% of their earnings)
+        const commissionFromThisDeposit = earningsFromThisDeposit * myCommissionRate;
+        accumulatedCommission += commissionFromThisDeposit;
+      }
       
-      // My total commission should be: initial commission + accumulated daily commissions
-      // Calculate accumulated commission from their growth
-      const accumulatedCommission = totalGrowth * myCommissionRate;
-      
-      // Total lifetime earnings = transaction commissions + accumulated commission from growth
-      const totalLifetimeEarnings = earnings.totalEarnings + accumulatedCommission;
+      // Total lifetime earnings = accumulated commission from all deposits' growth
+      // Note: We removed transaction-based commissions, so only per-second earnings commissions count
+      const totalLifetimeEarnings = accumulatedCommission;
 
       // Determine track based on deposit amount
       const track = referral.totalDeposit >= 50 ? 'upper' : 'lower';
@@ -337,17 +355,15 @@ router.get('/user-referrals', auth, async (req, res) => {
         myCommissionRate: myCommissionRate, // Your commission percentage (15%)
         lastEarningUpdate: referralRealTimeData.lastUpdate, // When their earnings were last updated
         myEarningsFromThisUser: {
-          total: totalLifetimeEarnings, // Total including transaction commissions + accumulated from growth
-          transactionCommissions: earnings.totalEarnings, // Just the transaction-based commissions
-          accumulatedCommissions: accumulatedCommission, // Commission from their balance growth
+          total: totalLifetimeEarnings, // Total lifetime commission from all their deposits' earnings
+          accumulatedCommissions: accumulatedCommission, // Commission calculated from each deposit's earning period
           commissionCount: earnings.transactionCount,
           lastEarningDate: earnings.lastEarning,
           calculationDetails: {
-            initialDeposit: initialDeposit,
-            currentBalance: currentBalance,
-            totalGrowth: totalGrowth,
-            secondsSinceJoined: secondsSinceJoined,
-            myCommissionRate: myCommissionRate
+            totalDeposits: referralDeposits.length,
+            myCommissionRate: myCommissionRate,
+            calculationMethod: 'per-deposit-simple-interest',
+            note: 'Each deposit earns separately from its own confirmation time'
           }
         }
       };
