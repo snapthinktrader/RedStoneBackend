@@ -284,6 +284,10 @@ router.get('/user-referrals', auth, async (req, res) => {
       const myCommissionPerSecond = referralEarningsPerSecond * myCommissionRate; // 15% of their per-second earnings
       const myCommissionPerDay = myCommissionPerSecond * SECONDS_PER_DAY; // 15% of their daily earnings
 
+      // Determine track based on deposit amount
+      const track = referral.totalDeposit >= 50 ? 'upper' : 'lower';
+      const trackLabel = referral.totalDeposit >= 50 ? 'Bronze Plus' : 'Bronze';
+      
       return {
         id: referral._id.toString(),
         referrerId: req.user.userId,
@@ -295,9 +299,13 @@ router.get('/user-referrals', auth, async (req, res) => {
         joinedAt: referral.createdAt.toISOString(),
         refereeDeposit: referral.totalDeposit,
         isActive: true,
+        // Track information
+        track: track, // 'lower' or 'upper'
+        trackLabel: trackLabel, // 'Bronze' or 'Bronze Plus'
         // Additional data for enhanced display
         walletBalance: referral.walletBalance,
         currentLevel: referral.currentLevel,
+        levelName: referral.levelName,
         // REAL-TIME earnings data (updates every second with compounding)
         realTimeBalance: referralRealTimeData.calculatedBalance, // Their current balance including pending earnings
         pendingEarnings: referralRealTimeData.pendingEarnings, // Their unclaimed earnings since last update
@@ -379,27 +387,58 @@ router.get('/stats', auth, async (req, res) => {
 
     const indirectReferralCount = indirectReferralData[0]?.total || 0;
 
-  // Get milestone bonuses information - use lower track for primary display
-  const milestones = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
-    
-    // Find next milestone
-    let nextMilestone = null;
-    let currentMilestoneReached = null;
-    
-    for (const [count, bonus] of Object.entries(milestones)) {
-      const milestoneCount = parseInt(count);
-      if (directReferralCount >= milestoneCount) {
-        currentMilestoneReached = { count: milestoneCount, bonus };
-      } else if (!nextMilestone) {
-        nextMilestone = {
-          count: milestoneCount,
-          bonus,
-          progress: directReferralCount,
-          remaining: milestoneCount - directReferralCount,
-          progressPercentage: Math.round((directReferralCount / milestoneCount) * 100),
-        };
-      }
+  // Get milestone bonuses information - dual track system
+  const lowerTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":15,"10":30,"15":45,"25":65,"50":100,"100":300,"500":1000,"1000":3500}');
+  const upperTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_UPPER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1600,"500":5000,"1000":10000}');
+  
+  // Get counts for each track
+  const lowerTrackCount = user.milestoneTracking?.lowerTrack?.count || 0;
+  const upperTrackCount = user.milestoneTracking?.upperTrack?.count || 0;
+  
+  // Find next milestone for lower track
+  let nextLowerMilestone = null;
+  let currentLowerMilestoneReached = null;
+  
+  for (const [count, bonus] of Object.entries(lowerTrackBonuses)) {
+    const milestoneCount = parseInt(count);
+    if (lowerTrackCount >= milestoneCount) {
+      currentLowerMilestoneReached = { count: milestoneCount, bonus };
+    } else if (!nextLowerMilestone) {
+      nextLowerMilestone = {
+        count: milestoneCount,
+        bonus,
+        progress: lowerTrackCount,
+        remaining: milestoneCount - lowerTrackCount,
+        progressPercentage: Math.round((lowerTrackCount / milestoneCount) * 100),
+        track: 'lower'
+      };
     }
+  }
+  
+  // Find next milestone for upper track
+  let nextUpperMilestone = null;
+  let currentUpperMilestoneReached = null;
+  
+  for (const [count, bonus] of Object.entries(upperTrackBonuses)) {
+    const milestoneCount = parseInt(count);
+    if (upperTrackCount >= milestoneCount) {
+      currentUpperMilestoneReached = { count: milestoneCount, bonus };
+    } else if (!nextUpperMilestone) {
+      nextUpperMilestone = {
+        count: milestoneCount,
+        bonus,
+        progress: upperTrackCount,
+        remaining: milestoneCount - upperTrackCount,
+        progressPercentage: Math.round((upperTrackCount / milestoneCount) * 100),
+        track: 'upper'
+      };
+    }
+  }
+  
+  // Use lower track for backward compatibility
+  const milestones = lowerTrackBonuses;
+  const nextMilestone = nextLowerMilestone;
+  const currentMilestoneReached = currentLowerMilestoneReached;
 
     // Get commission earnings by time period
     const commissionStats = await Transaction.aggregate([
@@ -463,6 +502,8 @@ router.get('/stats', auth, async (req, res) => {
           direct: directReferralCount,
           indirect: indirectReferralCount,
           total: directReferralCount + indirectReferralCount,
+          lowerTrack: lowerTrackCount,
+          upperTrack: upperTrackCount,
         },
         earnings,
         milestones: {
@@ -473,6 +514,19 @@ router.get('/stats', auth, async (req, res) => {
             bonus,
             achieved: directReferralCount >= parseInt(count),
           })),
+          // Dual track information
+          lowerTrack: {
+            current: currentLowerMilestoneReached,
+            next: nextLowerMilestone,
+            count: lowerTrackCount,
+            bonuses: lowerTrackBonuses,
+          },
+          upperTrack: {
+            current: currentUpperMilestoneReached,
+            next: nextUpperMilestone,
+            count: upperTrackCount,
+            bonuses: upperTrackBonuses,
+          },
         },
         recentReferrals,
         commissionRate: user.commissionRate,

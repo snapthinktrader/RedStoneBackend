@@ -412,13 +412,16 @@ class ReferralController {
 
   // Helper methods
   static calculateMilestoneProgress(referralCount) {
-    const milestones = [
-      { count: 10, bonus: 100, title: 'Starter' },
-      { count: 25, bonus: 300, title: 'Achiever' },
-      { count: 50, bonus: 750, title: 'Champion' },
-      { count: 100, bonus: 2000, title: 'Master' },
-      { count: 200, bonus: 5000, title: 'Legend' }
-    ];
+    // Get milestones from environment configuration - use lower track for primary display
+    const milestonesConfig = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
+    
+    const milestones = Object.entries(milestonesConfig)
+      .map(([count, bonus]) => ({
+        count: parseInt(count),
+        bonus: parseInt(bonus),
+        title: this.getMilestoneTitle(parseInt(count))
+      }))
+      .sort((a, b) => a.count - b.count);
 
     const completedMilestones = milestones.filter(m => referralCount >= m.count);
     const nextMilestone = milestones.find(m => referralCount < m.count);
@@ -432,6 +435,16 @@ class ReferralController {
       } : null,
       totalEarned: completedMilestones.reduce((sum, m) => sum + m.bonus, 0)
     };
+  }
+
+  static getMilestoneTitle(count) {
+    if (count <= 3) return 'Starter';
+    if (count <= 10) return 'Bronze';
+    if (count <= 25) return 'Silver';
+    if (count <= 50) return 'Gold';
+    if (count <= 100) return 'Platinum';
+    if (count <= 200) return 'Diamond';
+    return 'Legend';
   }
 
   static async getReferralClicks(userId) {

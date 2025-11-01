@@ -55,22 +55,28 @@ async function checkFuelWalletData() {
       console.log('❌ Could not fetch USDT balance:', usdtError.message);
     }
     
-    // Get recent transactions
+    // Get recent transactions using TronScan API (alternative)
     console.log('\n📋 Recent Transactions:');
     try {
-      const transactions = await tronWeb.trx.getTransactionsFromAddress(walletAddress, 5, 0);
-      if (transactions && transactions.length > 0) {
-        transactions.forEach((tx, index) => {
-          console.log(`${index + 1}. TX ID: ${tx.txID}`);
-          console.log(`   Type: ${tx.raw_data.contract[0].type}`);
-          console.log(`   Timestamp: ${new Date(tx.raw_data.timestamp).toLocaleString()}`);
-          console.log('');
-        });
+      const response = await fetch(`https://apilist.tronscan.org/api/transaction?sort=-timestamp&count=true&limit=5&start=0&address=${walletAddress}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.data && data.data.length > 0) {
+          data.data.forEach((tx, index) => {
+            console.log(`${index + 1}. TX ID: ${tx.hash}`);
+            console.log(`   Type: ${tx.contractType || 'Transfer'}`);
+            console.log(`   Timestamp: ${new Date(tx.timestamp).toLocaleString()}`);
+            console.log(`   Amount: ${tx.amount ? (tx.amount / 1000000) + ' USDT' : 'N/A'}`);
+            console.log('');
+          });
+        } else {
+          console.log('✅ No recent transactions found (wallet clean)');
+        }
       } else {
-        console.log('No recent transactions found');
+        console.log('⚠️  Could not fetch transactions (TronScan API unavailable)');
       }
     } catch (txError) {
-      console.log('❌ Could not fetch transactions:', txError.message);
+      console.log('⚠️  Could not fetch transactions:', txError.message);
     }
     
     // Network status
