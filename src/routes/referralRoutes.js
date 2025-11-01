@@ -727,4 +727,107 @@ router.get('/tree', auth, async (req, res) => {
   }
 });
 
+// @route   POST /api/referral/initialize-milestones
+// @desc    Initialize milestone tracking for existing referrals
+// @access  Private
+router.post('/initialize-milestones', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    // Get all direct referrals
+    const referrals = await User.find({
+      referredBy: req.user.userId,
+      isActive: true,
+    });
+
+    console.log(`\n🔄 Initializing milestone tracking for ${user.email}`);
+    console.log(`📊 Found ${referrals.length} referrals`);
+
+    // Initialize milestone tracking if it doesn't exist
+    if (!user.milestoneTracking) {
+      user.milestoneTracking = {
+        lowerTrack: { count: 0, lastMilestoneClaimed: 0 },
+        upperTrack: { count: 0, lastMilestoneClaimed: 0 }
+      };
+    }
+
+    // Count referrals by track
+    let lowerCount = 0;
+    let upperCount = 0;
+
+    referrals.forEach(ref => {
+      const deposit = ref.totalDeposit || 0;
+      if (deposit >= 50) {
+        upperCount++;
+        console.log(`  ✓ ${ref.name || ref.email}: $${deposit} → Upper Track`);
+      } else {
+        lowerCount++;
+        console.log(`  ✓ ${ref.name || ref.email}: $${deposit} → Lower Track`);
+      }
+    });
+
+    // Update counts
+    user.milestoneTracking.lowerTrack.count = lowerCount;
+    user.milestoneTracking.upperTrack.count = upperCount;
+
+    await user.save();
+
+    console.log(`✅ Updated milestone tracking:`);
+    console.log(`   Lower Track: ${lowerCount} referrals`);
+    console.log(`   Upper Track: ${upperCount} referrals`);
+
+    // Get milestone bonuses
+    const lowerTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":15,"10":30,"15":45,"25":65,"50":100,"100":300,"500":1000,"1000":3500}');
+    const upperTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_UPPER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1600,"500":5000,"1000":10000}');
+
+    // Find next milestones
+    let nextLowerMilestone = null;
+    let nextUpperMilestone = null;
+
+    for (const [count, bonus] of Object.entries(lowerTrackBonuses)) {
+      if (lowerCount < parseInt(count)) {
+        nextLowerMilestone = { count: parseInt(count), bonus };
+        break;
+      }
+    }
+
+    for (const [count, bonus] of Object.entries(upperTrackBonuses)) {
+      if (upperCount < parseInt(count)) {
+        nextUpperMilestone = { count: parseInt(count), bonus };
+        break;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Milestone tracking initialized successfully',
+      data: {
+        lowerTrack: {
+          count: lowerCount,
+          next: nextLowerMilestone,
+        },
+        upperTrack: {
+          count: upperCount,
+          next: nextUpperMilestone,
+        },
+        totalReferrals: referrals.length,
+      },
+    });
+
+  } catch (error) {
+    logger.error('Initialize milestones error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error initializing milestone tracking',
+    });
+  }
+});
+
 module.exports = router;
