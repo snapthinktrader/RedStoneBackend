@@ -362,6 +362,30 @@ userSchema.methods.updateReferralLevel = function() {
   return this;
 };
 
+// Sync referral counts and level by counting actual referrals from database
+userSchema.methods.syncReferralData = async function() {
+  // Count actual direct referrals
+  const actualDirectReferrals = await this.constructor.countDocuments({
+    referredBy: this._id,
+    isActive: true
+  });
+  
+  // Count actual indirect referrals
+  const actualIndirectReferrals = await this.constructor.countDocuments({
+    referredBy: { $in: await this.constructor.find({ referredBy: this._id, isActive: true }).distinct('_id') },
+    isActive: true
+  });
+  
+  // Update counts
+  this.directReferrals = actualDirectReferrals;
+  this.indirectReferrals = actualIndirectReferrals;
+  
+  // Update referral level based on actual count
+  this.updateReferralLevel();
+  
+  return this;
+};
+
 userSchema.methods.getDailyEarnings = function() {
   // Daily earnings based on deposit level rates (recheck.txt documents 1-3)
   return (this.walletBalance || 0) * this.dailyEarningRate;
@@ -375,43 +399,23 @@ userSchema.methods.getCommissionRate = function() {
 /**
  * Get milestone bonuses based on referral count and track type
  * Dual-track system: Lower ($0-$49) and Upper ($50+)
- * Based on recheck.txt documents 11-12
+ * Uses environment configuration for milestone values
  * @param {Number} referralCount - Referral count for specific track
  * @param {String} track - 'lower' or 'upper'
  * @returns {Number} - Bonus amount
  */
 userSchema.methods.getMilestoneBonus = function(referralCount, track = 'lower') {
-  // Lower track bonuses ($0-$49 deposits) - Always available
-  const lowerTrackBonuses = {
-    3: 15,      // $15 for 3 referrals
-    10: 30,     // $30 for 10 referrals
-    15: 45,     // $45 for 15 referrals
-    25: 65,     // $65 for 25 referrals
-    50: 100,    // $100 for 50 referrals
-    100: 300,   // $300 for 100 referrals
-    500: 1000,  // $1000 for 500 referrals
-    1000: 3500  // $3500 for 1000 referrals
-  };
-  
-  // Upper track bonuses ($50+ deposits) - Only for Bronze+ levels
-  const upperTrackBonuses = {
-    3: 50,      // $50 for 3 referrals
-    10: 100,    // $100 for 10 referrals
-    15: 150,    // $150 for 15 referrals
-    25: 250,    // $250 for 25 referrals
-    50: 750,    // $750 for 50 referrals
-    100: 1600,  // $1600 for 100 referrals
-    500: 5000,  // $5000 for 500 referrals
-    1000: 25000 // $25000 for 1000 referrals
-  };
+  // Get milestone bonuses from environment configuration
+  const lowerTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
+  const upperTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_UPPER || '{"3":100,"10":200,"15":300,"25":500,"50":1500,"100":3000,"500":10000,"1000":50000}');
   
   if (track === 'upper') {
     // Upper bonuses only for Bronze+ (level 2+)
-    return this.currentLevel >= 2 ? (upperTrackBonuses[referralCount] || 0) : 0;
+    return this.currentLevel >= 2 ? (parseInt(upperTrackBonuses[referralCount]) || 0) : 0;
   }
   
   // Lower bonuses available for all levels
-  return lowerTrackBonuses[referralCount] || 0;
+  return parseInt(lowerTrackBonuses[referralCount]) || 0;
 };
 
 /**
@@ -420,7 +424,11 @@ userSchema.methods.getMilestoneBonus = function(referralCount, track = 'lower') 
  * @returns {Object} - { lowerMilestones: Array, upperMilestones: Array, canClaimUpper: Boolean }
  */
 userSchema.methods.checkMilestoneBonus = function() {
-  const milestones = [3, 10, 15, 25, 50, 100, 500, 1000];
+  // Get milestone counts from environment configuration
+  const lowerTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
+  const upperTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_UPPER || '{"3":100,"10":200,"15":300,"25":500,"50":1500,"100":3000,"500":10000,"1000":50000}');
+  
+  const milestones = Object.keys(lowerTrackBonuses).map(k => parseInt(k)).sort((a, b) => a - b);
   
   // Initialize tracking if not exists
   if (!this.milestoneTracking) {
@@ -699,6 +707,26 @@ userSchema.statics.generateReferralCode = function() {
 
 userSchema.statics.findByReferralCode = function(referralCode) {
   return this.findOne({ referralCode: referralCode.toUpperCase() });
+};
+
+// Fix all users' referral levels by syncing with actual database counts
+userSchema.statics.fixAllReferralLevels = async function() {
+  const users = await this.find({ isActive: true });
+  let updatedCount = 0;
+  
+  for (const user of users) {
+    const oldLevel = user.referralLevel || 1;
+    await user.syncReferralData();
+    await user.save();
+    
+    if (user.referralLevel !== oldLevel) {
+      console.log(`Updated ${user.name} (${user.email}): Level ${oldLevel} → ${user.referralLevel} (${user.directReferrals} referrals)`);
+      updatedCount++;
+    }
+  }
+  
+  console.log(`Fixed ${updatedCount} users' referral levels`);
+  return updatedCount;
 };
 
 userSchema.statics.getUserStats = async function(userId) {

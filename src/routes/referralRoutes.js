@@ -268,13 +268,21 @@ router.get('/user-referrals', auth, async (req, res) => {
 
       const earnings = commissionData[0] || { totalEarnings: 0, transactionCount: 0, lastEarning: null };
 
-      // Calculate referral's daily earnings (what they earn per day from their balance)
+      // Calculate referral's REAL-TIME earnings (includes compounding)
       const refUserModel = await User.findById(referral._id);
-      const referralDailyEarnings = refUserModel ? refUserModel.getDailyEarnings() : 0;
-
-      // Calculate expected daily commission from this referral (for display)
+      const referralRealTimeData = refUserModel ? refUserModel.calculateRealTimeEarnings() : { calculatedBalance: 0, pendingEarnings: 0, dailyRate: 0, ratePerSecond: 0 };
+      
+      // Calculate their ACTUAL per-second earnings based on their current balance
+      const SECONDS_PER_DAY = 86400;
+      const referralCurrentBalance = referralRealTimeData.calculatedBalance; // Their real-time balance including pending
+      const referralDailyEarningRate = refUserModel ? refUserModel.dailyEarningRate : 0; // Their daily % rate
+      const referralEarningsPerSecond = (referralCurrentBalance * referralDailyEarningRate) / SECONDS_PER_DAY; // Actual $ per second
+      
+      // Calculate YOUR commission from their per-second earnings
       const user = await User.findById(req.user.userId);
-      const myCommissionFromThisUser = user ? (referralDailyEarnings * user.commissionRate) : 0;
+      const myCommissionRate = user ? user.getCommissionRate() : 0; // Your 15% rate
+      const myCommissionPerSecond = referralEarningsPerSecond * myCommissionRate; // 15% of their per-second earnings
+      const myCommissionPerDay = myCommissionPerSecond * SECONDS_PER_DAY; // 15% of their daily earnings
 
       return {
         id: referral._id.toString(),
@@ -290,9 +298,17 @@ router.get('/user-referrals', auth, async (req, res) => {
         // Additional data for enhanced display
         walletBalance: referral.walletBalance,
         currentLevel: referral.currentLevel,
-        // NEW: Daily earnings data (shows real-time earning potential)
-        dailyEarnings: referralDailyEarnings, // What this referral earns per day
-        myDailyCommission: myCommissionFromThisUser, // What you earn per day from them
+        // REAL-TIME earnings data (updates every second with compounding)
+        realTimeBalance: referralRealTimeData.calculatedBalance, // Their current balance including pending earnings
+        pendingEarnings: referralRealTimeData.pendingEarnings, // Their unclaimed earnings since last update
+        currentBalanceForEarnings: referralCurrentBalance, // Balance used for earning calculations
+        dailyEarningRate: referralDailyEarningRate, // Their daily percentage rate
+        actualEarningsPerSecond: referralEarningsPerSecond, // Their actual $ per second from current balance
+        actualDailyEarnings: referralEarningsPerSecond * SECONDS_PER_DAY, // Their actual daily $ earnings
+        myDailyCommission: myCommissionPerDay, // What you earn per day from them (15% of their daily earnings)
+        myCommissionPerSecond: myCommissionPerSecond, // What you earn per second from them (15% of their per-sec earnings)
+        myCommissionRate: myCommissionRate, // Your commission percentage (15%)
+        lastEarningUpdate: referralRealTimeData.lastUpdate, // When their earnings were last updated
         myEarningsFromThisUser: {
           total: earnings.totalEarnings,
           commissionCount: earnings.transactionCount,
@@ -363,9 +379,8 @@ router.get('/stats', auth, async (req, res) => {
 
     const indirectReferralCount = indirectReferralData[0]?.total || 0;
 
-  // Get milestone bonuses information
-  // Include 3 referrals -> $15 by default so the small-bronze milestone is visible
-  const milestones = JSON.parse(process.env.MILESTONE_BONUSES || '{"3":15,"10":100,"25":300,"50":750,"100":2000,"200":5000}');
+  // Get milestone bonuses information - use lower track for primary display
+  const milestones = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
     
     // Find next milestone
     let nextMilestone = null;

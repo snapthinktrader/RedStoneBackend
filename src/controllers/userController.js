@@ -26,6 +26,9 @@ class UserController {
       const totalPendingEarnings = earningsData.pendingEarnings + referralCommissionData.pendingCommission;
       const totalCalculatedBalance = earningsData.calculatedBalance + referralCommissionData.pendingCommission;
 
+      // Calculate next milestone for Flutter app
+      const nextMilestone = UserController.getNextMilestone(user.directReferrals || 0);
+
       res.json({
         success: true,
         data: {
@@ -46,6 +49,9 @@ class UserController {
             totalEarnings: user.totalEarnings || 0, // Total earnings from database
             directReferrals: user.directReferrals || 0,
             indirectReferrals: user.indirectReferrals || 0,
+            // Milestone data for Flutter app
+            nextBonusAmount: nextMilestone.bonus,
+            nextBonusTarget: nextMilestone.target,
             // Dual-level system
             currentLevel: user.currentLevel, // Deposit-based level (1-8)
             referralLevel: user.referralLevel, // Referral-based level (1-9)
@@ -579,13 +585,16 @@ class UserController {
 
   // Helper method to calculate next milestone
   static getNextMilestone(currentReferrals) {
-    const milestones = [
-      { count: 10, bonus: 100 },
-      { count: 25, bonus: 300 },
-      { count: 50, bonus: 750 },
-      { count: 100, bonus: 2000 },
-      { count: 200, bonus: 5000 }
-    ];
+    // Get milestones from environment configuration
+    // For now, use the lower track as the primary milestone display for Flutter compatibility
+    const milestonesConfig = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1000,"500":5000,"1000":25000}');
+    
+    const milestones = Object.entries(milestonesConfig)
+      .map(([count, bonus]) => ({
+        count: parseInt(count),
+        bonus: parseInt(bonus)
+      }))
+      .sort((a, b) => a.count - b.count);
 
     for (const milestone of milestones) {
       if (currentReferrals < milestone.count) {
@@ -599,12 +608,13 @@ class UserController {
       }
     }
 
-    // All milestones achieved
+    // All milestones achieved - use the highest milestone
+    const highestMilestone = milestones[milestones.length - 1];
     return {
-      target: 200,
+      target: highestMilestone.count,
       current: currentReferrals,
       remaining: 0,
-      bonus: 5000,
+      bonus: highestMilestone.bonus,
       progress: 100,
       completed: true
     };

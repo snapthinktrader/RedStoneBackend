@@ -54,12 +54,13 @@ class AuthController {
 
       // Update referral counts
       if (referredBy) {
-        // Increment direct referrals for the referrer
-        await User.findByIdAndUpdate(referredBy._id, {
-          $inc: { directReferrals: 1 }
-        });
+        // Increment direct referrals for the referrer and update their referral level
+        const updatedReferrer = await User.findById(referredBy._id);
+        updatedReferrer.directReferrals = (updatedReferrer.directReferrals || 0) + 1;
+        updatedReferrer.updateReferralLevel(); // Manually update referral level
+        await updatedReferrer.save();
         
-        logger.info(`✅ Incremented directReferrals for user ${referredBy._id} (${referredBy.name})`);
+        logger.info(`✅ Incremented directReferrals for user ${referredBy._id} (${referredBy.name}) - New level: ${updatedReferrer.referralLevel}`);
         
         // If referrer was also referred by someone, increment indirect referrals for that person
         if (referredBy.referredBy) {
