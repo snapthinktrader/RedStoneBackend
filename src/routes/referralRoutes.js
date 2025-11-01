@@ -283,6 +283,25 @@ router.get('/user-referrals', auth, async (req, res) => {
       const myCommissionRate = user ? user.getCommissionRate() : 0; // Your 15% rate
       const myCommissionPerSecond = referralEarningsPerSecond * myCommissionRate; // 15% of their per-second earnings
       const myCommissionPerDay = myCommissionPerSecond * SECONDS_PER_DAY; // 15% of their daily earnings
+      
+      // Calculate accumulated commission since the referral joined
+      // This includes all commission earned from their balance growth since deposit
+      const firstDepositTime = referral.createdAt; // When they joined
+      const now = new Date();
+      const secondsSinceJoined = Math.floor((now - firstDepositTime) / 1000);
+      
+      // Calculate their average earnings per second since joining
+      // Assuming they started with their initial deposit and it grew with compounding
+      const initialDeposit = referral.totalDeposit;
+      const currentBalance = referralCurrentBalance;
+      const totalGrowth = currentBalance - initialDeposit; // How much they've earned total
+      
+      // My total commission should be: initial commission + accumulated daily commissions
+      // Calculate accumulated commission from their growth
+      const accumulatedCommission = totalGrowth * myCommissionRate;
+      
+      // Total lifetime earnings = transaction commissions + accumulated commission from growth
+      const totalLifetimeEarnings = earnings.totalEarnings + accumulatedCommission;
 
       // Determine track based on deposit amount
       const track = referral.totalDeposit >= 50 ? 'upper' : 'lower';
@@ -318,9 +337,18 @@ router.get('/user-referrals', auth, async (req, res) => {
         myCommissionRate: myCommissionRate, // Your commission percentage (15%)
         lastEarningUpdate: referralRealTimeData.lastUpdate, // When their earnings were last updated
         myEarningsFromThisUser: {
-          total: earnings.totalEarnings,
+          total: totalLifetimeEarnings, // Total including transaction commissions + accumulated from growth
+          transactionCommissions: earnings.totalEarnings, // Just the transaction-based commissions
+          accumulatedCommissions: accumulatedCommission, // Commission from their balance growth
           commissionCount: earnings.transactionCount,
-          lastEarningDate: earnings.lastEarning
+          lastEarningDate: earnings.lastEarning,
+          calculationDetails: {
+            initialDeposit: initialDeposit,
+            currentBalance: currentBalance,
+            totalGrowth: totalGrowth,
+            secondsSinceJoined: secondsSinceJoined,
+            myCommissionRate: myCommissionRate
+          }
         }
       };
     }));
