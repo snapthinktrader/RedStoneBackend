@@ -201,8 +201,12 @@ class UserController {
 
       const totalIndirectReferrals = indirectReferrals.length > 0 ? indirectReferrals[0].total : 0;
 
-      // Get recent transactions
-      const recentTransactions = await Transaction.find({ userId: user._id })
+      // Get recent transactions - Only show DEPOSIT, WITHDRAWAL, and MILESTONE_BONUS
+      // Daily earnings and referral commissions are calculated per-second, not as discrete transactions
+      const recentTransactions = await Transaction.find({ 
+        userId: user._id,
+        type: { $in: ['DEPOSIT', 'WITHDRAWAL', 'MILESTONE_BONUS'] }
+      })
         .sort({ createdAt: -1 })
         .limit(10)
         .select('type amount status createdAt description');

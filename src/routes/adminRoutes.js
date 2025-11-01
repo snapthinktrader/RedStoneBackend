@@ -72,13 +72,16 @@ router.post('/users/:id/credit', async (req, res) => {
     }
     
     // Determine transaction type based on reason
+    // Note: Referral bonuses are now handled automatically via:
+    // 1. Daily earnings commission (cronJobs)
+    // 2. Milestone bonuses (when referral count targets hit)
     let transactionType = 'MANUAL_CREDIT';
     if (reason === 'Promotional Bonus') {
       transactionType = 'PROMOTIONAL_BONUS';
     } else if (reason === 'Support Credit') {
       transactionType = 'SUPPORT_CREDIT';
-    } else if (reason === 'Referral Bonus') {
-      transactionType = 'REFERRAL_COMMISSION';
+    } else if (reason === 'Milestone Bonus') {
+      transactionType = 'MILESTONE_BONUS';
     }
     
     // Create transaction record
@@ -132,7 +135,10 @@ router.post('/users/:id/credit', async (req, res) => {
   }
 });
 
-// Add admin deposit (simulates real deposit + triggers referral commissions)
+// Add admin deposit (NO referral commissions on deposits)
+// Note: Referral earnings are now ONLY from:
+// 1. Daily earnings commission (handled by cronJobs)
+// 2. Milestone bonuses (handled separately when targets hit)
 router.post('/users/:id/deposit', async (req, res) => {
   const mongoose = require('mongoose');
   const session = await mongoose.startSession();
@@ -157,8 +163,6 @@ router.post('/users/:id/deposit', async (req, res) => {
       });
     }
     
-    let commissionsCreated = [];
-    
     await session.withTransaction(async () => {
       // Create DEPOSIT transaction
       const depositTransaction = new Transaction({
@@ -170,7 +174,7 @@ router.post('/users/:id/deposit', async (req, res) => {
         processedAt: new Date(),
         metadata: {
           addedBy: 'admin',
-          isAdminDeposit: true,  // Mark as admin deposit
+          isAdminDeposit: true,
           timestamp: new Date().toISOString()
         }
       });
@@ -180,78 +184,20 @@ router.post('/users/:id/deposit', async (req, res) => {
       // Update user balance and total deposit
       user.walletBalance += parseFloat(amount);
       user.totalDeposit = (user.totalDeposit || 0) + parseFloat(amount);
+      
+      // Start earnings timer if first deposit
+      if (!user.lastEarningUpdate) {
+        user.lastEarningUpdate = new Date();
+      }
+      
       await user.save({ session });
       
-      // Calculate referral commissions if user was referred
+      // Update milestone tracking for referrer (if applicable)
       if (user.referredBy) {
-        // Level 1 Referral (Direct)
-        const level1Referrer = await User.findById(user.referredBy).session(session);
-        if (level1Referrer && level1Referrer.isActive) {
-          const level1Commission = parseFloat(amount) * level1Referrer.getCommissionRate();
-          
-          const level1Transaction = new Transaction({
-            userId: level1Referrer._id,
-            type: 'REFERRAL_COMMISSION',
-            amount: level1Commission,
-            status: 'COMPLETED',
-            description: `Level 1 referral commission from ${user.name}`,
-            metadata: {
-              refereeId: user._id,
-              refereeName: user.name,
-              depositAmount: parseFloat(amount),
-              level: 1,
-              isFromAdminDeposit: true  // Mark that this came from admin deposit
-            },
-            processedAt: new Date(),
-          });
-          
-          await level1Transaction.save({ session });
-          
-          level1Referrer.walletBalance += level1Commission;
-          await level1Referrer.save({ session });
-          
-          commissionsCreated.push({
-            level: 1,
-            userId: level1Referrer._id,
-            userName: level1Referrer.name,
-            amount: level1Commission
-          });
-          
-          // Level 2 Referral (Indirect) - 30% of level 1 commission
-          if (level1Referrer.referredBy) {
-            const level2Referrer = await User.findById(level1Referrer.referredBy).session(session);
-            if (level2Referrer && level2Referrer.isActive) {
-              const level2Commission = level1Commission * 0.3; // 30% of level 1
-              
-              const level2Transaction = new Transaction({
-                userId: level2Referrer._id,
-                type: 'REFERRAL_COMMISSION',
-                amount: level2Commission,
-                status: 'COMPLETED',
-                description: `Level 2 referral commission from ${user.name}`,
-                metadata: {
-                  refereeId: user._id,
-                  refereeName: user.name,
-                  depositAmount: parseFloat(amount),
-                  level: 2,
-                  isFromAdminDeposit: true  // Mark that this came from admin deposit
-                },
-                processedAt: new Date(),
-              });
-              
-              await level2Transaction.save({ session });
-              
-              level2Referrer.walletBalance += level2Commission;
-              await level2Referrer.save({ session });
-              
-              commissionsCreated.push({
-                level: 2,
-                userId: level2Referrer._id,
-                userName: level2Referrer.name,
-                amount: level2Commission
-              });
-            }
-          }
+        const referrer = await User.findById(user.referredBy).session(session);
+        if (referrer) {
+          referrer.updateMilestoneTracking(parseFloat(amount));
+          await referrer.save({ session });
         }
       }
     });
@@ -269,7 +215,7 @@ router.post('/users/:id/deposit', async (req, res) => {
           walletBalance: user.walletBalance,
           totalDeposit: user.totalDeposit
         },
-        commissions: commissionsCreated
+        note: 'Referrers will earn from this user\'s daily earnings, not from deposits'
       }
     });
   } catch (error) {

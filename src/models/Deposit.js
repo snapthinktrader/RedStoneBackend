@@ -318,99 +318,24 @@ depositSchema.post('save', async function(doc) {
             
             await user.save();
             
-            // 3. Process referral commissions
+            // 3. Update milestone tracking for referrer (NO deposit-based commissions)
+            // Note: Referrers only earn from:
+            // 1. Referral earnings (% of referral's daily earnings) - handled in cronJobs
+            // 2. Milestone bonuses (when hitting referral count targets) - handled separately
             if (user.referredBy) {
                 const referrer = await User.findById(user.referredBy);
                 if (referrer) {
-                    const referrerLevel = levels.find(l => l.level === (referrer.currentLevel || 1));
-                    const directCommission = doc.amount * referrerLevel.directRate;
-                    
-                    referrer.walletBalance = (referrer.walletBalance || 0) + directCommission;
-                    referrer.totalEarnings = (referrer.totalEarnings || 0) + directCommission;
-                    referrer.referralEarnings = (referrer.referralEarnings || 0) + directCommission;
-                    
-                    // Start earnings timer if first commission
-                    if (!referrer.lastEarningUpdate) {
-                        referrer.lastEarningUpdate = new Date();
-                    }
-                    
-                    // Update milestone tracking for referrer based on deposit amount
+                    // Update milestone tracking based on this referral's deposit amount
                     referrer.updateMilestoneTracking(doc.amount);
                     
+                    // Start earnings timer if first referral starts earning
+                    if (!referrer.lastEarningUpdate) {
+                        referrer.lastEarningUpdate = new Date();
+                        console.log(`   Starting referrer earnings timer for ${referrer.email}`);
+                    }
+                    
                     await referrer.save();
-                    
-                    console.log(`   Direct commission: $${directCommission.toFixed(2)} to ${referrer.email}`);
-                    
-                    await Transaction.create({
-                        userId: referrer._id,
-                        type: 'REFERRAL_COMMISSION',
-                        subType: 'DIRECT',
-                        amount: directCommission,
-                        status: 'COMPLETED',
-                        description: `Direct referral commission from ${user.email || user.username}'s $${doc.amount} deposit`,
-                        relatedDeposit: doc._id
-                    });
-                    
-                    // Process indirect commission
-                    if (referrer.referredBy) {
-                        const indirectReferrer = await User.findById(referrer.referredBy);
-                        if (indirectReferrer) {
-                            const indirectLevel = levels.find(l => l.level === (indirectReferrer.currentLevel || 1));
-                            const indirectCommission = doc.amount * indirectLevel.indirectRate;
-                            
-                            indirectReferrer.walletBalance = (indirectReferrer.walletBalance || 0) + indirectCommission;
-                            indirectReferrer.totalEarnings = (indirectReferrer.totalEarnings || 0) + indirectCommission;
-                            indirectReferrer.referralEarnings = (indirectReferrer.referralEarnings || 0) + indirectCommission;
-                            await indirectReferrer.save();
-                            
-                            console.log(`   Indirect commission: $${indirectCommission.toFixed(2)} to ${indirectReferrer.email}`);
-                            
-                            await Transaction.create({
-                                userId: indirectReferrer._id,
-                                type: 'REFERRAL_COMMISSION',
-                                subType: 'INDIRECT',
-                                amount: indirectCommission,
-                                status: 'COMPLETED',
-                                description: `Indirect referral commission from ${user.email || user.username}'s $${doc.amount} deposit`,
-                                relatedDeposit: doc._id
-                            });
-                        }
-                    }
-                    
-                    // Check for recruitment bonus
-                    const Referral = mongoose.model('Referral');
-                    const referralCount = await Referral.countDocuments({ referrerId: referrer._id });
-                    
-                    const bonusTiers = [
-                        { count: 1000, bonus: 25000 },
-                        { count: 500, bonus: 5000 },
-                        { count: 100, bonus: 1000 },
-                        { count: 50, bonus: 750 },
-                        { count: 25, bonus: 250 },
-                        { count: 15, bonus: 150 },
-                        { count: 10, bonus: 100 },
-                        { count: 3, bonus: 50 }
-                    ];
-                    
-                    const achievedTier = bonusTiers.find(tier => referralCount >= tier.count);
-                    const paidTier = referrer.recruitmentBonusPaid || 0;
-                    
-                    if (achievedTier && achievedTier.count > paidTier) {
-                        referrer.walletBalance = (referrer.walletBalance || 0) + achievedTier.bonus;
-                        referrer.totalEarnings = (referrer.totalEarnings || 0) + achievedTier.bonus;
-                        referrer.recruitmentBonusPaid = achievedTier.count;
-                        await referrer.save();
-                        
-                        console.log(`   🎉 Recruitment bonus: $${achievedTier.bonus} for ${referralCount} referrals`);
-                        
-                        await Transaction.create({
-                            userId: referrer._id,
-                            type: 'RECRUITMENT_BONUS',
-                            amount: achievedTier.bonus,
-                            status: 'COMPLETED',
-                            description: `Recruitment bonus for ${referralCount} referrals`
-                        });
-                    }
+                    console.log(`   ✅ Milestone tracking updated for referrer ${referrer.email}`);
                 }
             }
             

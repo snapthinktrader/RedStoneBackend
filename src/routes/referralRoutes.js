@@ -415,6 +415,49 @@ router.get('/stats', auth, async (req, res) => {
 
     const indirectReferralCount = indirectReferralData[0]?.total || 0;
 
+    // Auto-initialize milestone tracking if it doesn't exist
+    if (!user.milestoneTracking || 
+        user.milestoneTracking.lowerTrack?.count === undefined || 
+        user.milestoneTracking.upperTrack?.count === undefined) {
+      
+      console.log(`🔄 Auto-initializing milestone tracking for ${user.email}`);
+      
+      // Get all direct referrals
+      const referrals = await User.find({
+        referredBy: req.user.userId,
+        isActive: true,
+      });
+
+      // Initialize milestone tracking
+      if (!user.milestoneTracking) {
+        user.milestoneTracking = {
+          lowerTrack: { count: 0, lastMilestoneClaimed: 0 },
+          upperTrack: { count: 0, lastMilestoneClaimed: 0 }
+        };
+      }
+
+      // Count referrals by track
+      let lowerCount = 0;
+      let upperCount = 0;
+
+      referrals.forEach(ref => {
+        const deposit = ref.totalDeposit || 0;
+        if (deposit >= 50) {
+          upperCount++;
+        } else {
+          lowerCount++;
+        }
+      });
+
+      // Update counts
+      user.milestoneTracking.lowerTrack.count = lowerCount;
+      user.milestoneTracking.upperTrack.count = upperCount;
+
+      await user.save();
+      
+      console.log(`✅ Auto-initialized: Lower=${lowerCount}, Upper=${upperCount}`);
+    }
+
   // Get milestone bonuses information - dual track system
   const lowerTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_LOWER || '{"3":15,"10":30,"15":45,"25":65,"50":100,"100":300,"500":1000,"1000":3500}');
   const upperTrackBonuses = JSON.parse(process.env.MILESTONE_BONUSES_UPPER || '{"3":50,"10":100,"15":150,"25":250,"50":750,"100":1600,"500":5000,"1000":10000}');

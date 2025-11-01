@@ -205,7 +205,7 @@ router.get('/', [
   auth,
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('type').optional().isIn(['DEPOSIT', 'WITHDRAWAL', 'DAILY_EARNING', 'REFERRAL_COMMISSION', 'MILESTONE_BONUS']),
+  query('type').optional().isIn(['DEPOSIT', 'WITHDRAWAL', 'MILESTONE_BONUS']).withMessage('Invalid transaction type'),
   query('status').optional().isIn(['PENDING', 'COMPLETED', 'FAILED', 'CANCELLED']),
 ], async (req, res) => {
   try {
@@ -223,9 +223,22 @@ router.get('/', [
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    // Build filter
-    const filter = { userId: req.user.userId };
-    if (req.query.type) filter.type = req.query.type;
+    // Build filter - Only show DEPOSIT, WITHDRAWAL, and MILESTONE_BONUS
+    // Note: DAILY_EARNING and REFERRAL_COMMISSION are calculated per-second and added to balance automatically
+    // so they shouldn't appear as individual transactions in history
+    const filter = { 
+      userId: req.user.userId,
+      type: { $in: ['DEPOSIT', 'WITHDRAWAL', 'MILESTONE_BONUS'] }
+    };
+    
+    // Allow override with query parameter (for backwards compatibility)
+    if (req.query.type) {
+      // Still filter to allowed types
+      if (['DEPOSIT', 'WITHDRAWAL', 'MILESTONE_BONUS'].includes(req.query.type)) {
+        filter.type = req.query.type;
+      }
+    }
+    
     if (req.query.status) filter.status = req.query.status;
 
     // Get transactions with pagination
