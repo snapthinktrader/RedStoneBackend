@@ -532,24 +532,13 @@ userSchema.methods.checkMilestoneBonus = function() {
 /**
  * Update milestone tracking when referral makes a deposit
  * @param {Number} depositAmount - Amount deposited by referral
+ * DEPRECATED: This method incorrectly counts deposits instead of unique referrals
+ * Milestone tracking is now handled by the /stats endpoint auto-initialization
  */
 userSchema.methods.updateMilestoneTracking = function(depositAmount) {
-  // Initialize if not exists
-  if (!this.milestoneTracking) {
-    this.milestoneTracking = {
-      lowerTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] },
-      upperTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] }
-    };
-  }
-  
-  // Categorize deposit: Lower ($0-$49) or Upper ($50+)
-  if (depositAmount < 50) {
-    this.milestoneTracking.lowerTrack.count += 1;
-    console.log(`   📊 Lower track milestone: ${this.milestoneTracking.lowerTrack.count} referrals ($0-$49)`);
-  } else {
-    this.milestoneTracking.upperTrack.count += 1;
-    console.log(`   📊 Upper track milestone: ${this.milestoneTracking.upperTrack.count} referrals ($50+)`);
-  }
+  // DO NOTHING - milestone tracking is now handled by the /stats endpoint
+  // which correctly counts unique referrals by their total deposits
+  console.log(`   ⚠️  updateMilestoneTracking called but ignored - use /stats endpoint for accurate counting`);
 };
 
 /**
@@ -600,59 +589,93 @@ userSchema.methods.calculateRealTimeEarnings = async function() {
   // Commission = % of (referral's stored balance × their daily rate)
   let commissionPerSecond = 0;
   let firstReferralDepositTime = null;
+  let referralDepositEvents = []; // Track all referral deposits for timeline
   
   if (myCommissionRate > 0 && this.totalReferrals > 0) {
     const refs = await this.constructor.find({
       referredBy: this._id,
       isActive: true
-    }).select('walletBalance totalDeposit');
+    }).select('_id walletBalance totalDeposit');
     
-    // Get first referral deposit time FIRST
+    // Get ALL referral deposit transactions for timeline
     const Transaction = require('./Transaction');
-    const firstRefDeposit = await Transaction.findOne({
+    const allRefDeposits = await Transaction.find({
       userId: { $in: refs.map(r => r._id) },
       type: 'DEPOSIT',
       status: 'COMPLETED'
-    }).sort({ createdAt: 1 }).select('createdAt');
+    }).select('userId amount createdAt').sort({ createdAt: 1 });
     
-    if (firstRefDeposit) {
-      firstReferralDepositTime = new Date(firstRefDeposit.createdAt);
+    if (allRefDeposits.length > 0) {
+      firstReferralDepositTime = new Date(allRefDeposits[0].createdAt);
       
-      // Only calculate commission if referrals have deposited
-      for (const ref of refs) {
-        if (ref.totalDeposit > 0) {
-          const refDailyRate = getEarningRate(ref.totalDeposit);
-          const refEarningsPerDay = ref.walletBalance * refDailyRate;
-          const myCommissionPerDay = refEarningsPerDay * myCommissionRate;
-          commissionPerSecond += myCommissionPerDay / SECONDS_PER_DAY;
-        }
-      }
+      // Store referral deposit events for timeline processing
+      referralDepositEvents = allRefDeposits.map(dep => ({
+        time: new Date(dep.createdAt),
+        type: 'REFERRAL_DEPOSIT',
+        referralId: dep.userId.toString(),
+        amount: dep.amount
+      }));
     }
   }
   
   // TIMELINE-BASED CALCULATION
-  // Process each transaction event and compound earnings between events
+  // Merge your transactions with referral deposit events for accurate commission tracking
+  const allEvents = [
+    ...transactions.map(tx => ({
+      time: new Date(tx.createdAt),
+      type: tx.type,
+      amount: tx.amount,
+      isYourTransaction: true
+    })),
+    ...referralDepositEvents
+  ].sort((a, b) => a.time - b.time);
+  
+  // Track referral deposits per referral ID to calculate commission rates
+  const referralTotals = {}; // { referralId: totalDeposit }
+  
+  // Process each event and compound earnings between events
   let balance = 0;
   let totalDeposits = 0;
   let currentRate = 0;
   let totalOwnEarnings = 0;
   let totalCommissionEarnings = 0;
   
-  const yourFirstTxTime = new Date(transactions[0].createdAt);
+  const yourFirstTxTime = allEvents.find(e => e.isYourTransaction) ? allEvents.find(e => e.isYourTransaction).time : now;
   const commissionStartTime = firstReferralDepositTime || new Date('2099-01-01'); // Far future if no referrals
   
-  for (let i = 0; i < transactions.length; i++) {
-    const event = transactions[i];
-    const nextEvent = transactions[i + 1];
-    const eventTime = new Date(event.createdAt);
-    const nextTime = nextEvent ? new Date(nextEvent.createdAt) : now;
+  for (let i = 0; i < allEvents.length; i++) {
+    const event = allEvents[i];
+    const nextEvent = allEvents[i + 1];
+    const eventTime = event.time;
+    const nextTime = nextEvent ? nextEvent.time : now;
     
-    // Process the transaction event
-    if (event.type === 'DEPOSIT') {
-      totalDeposits += event.amount;
-      currentRate = getEarningRate(totalDeposits);
+    // Process the event
+    if (event.isYourTransaction) {
+      // Your transaction - affects your balance and rate
+      if (event.type === 'DEPOSIT') {
+        totalDeposits += event.amount;
+        currentRate = getEarningRate(totalDeposits);
+      }
+      balance += event.amount; // Add transaction amount to balance
+    } else if (event.type === 'REFERRAL_DEPOSIT') {
+      // Referral deposit - update referral totals (affects commission rate going forward)
+      const refId = event.referralId;
+      referralTotals[refId] = (referralTotals[refId] || 0) + event.amount;
     }
-    balance += event.amount; // Add transaction amount to balance
+    
+    // Recalculate commission per second based on current referral totals
+    commissionPerSecond = 0;
+    if (myCommissionRate > 0 && eventTime >= commissionStartTime) {
+      for (const refId in referralTotals) {
+        const refTotal = referralTotals[refId];
+        if (refTotal > 0) {
+          const refDailyRate = getEarningRate(refTotal);
+          const refEarningsPerDay = refTotal * refDailyRate;
+          const myCommissionPerDay = refEarningsPerDay * myCommissionRate;
+          commissionPerSecond += myCommissionPerDay / SECONDS_PER_DAY;
+        }
+      }
+    }
     
     // Calculate compound earnings for the period UNTIL the next event (or now)
     const periodSeconds = Math.floor((nextTime - eventTime) / 1000);
