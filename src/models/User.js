@@ -138,6 +138,21 @@ const userSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Indirect referrals cannot be negative'],
   },
+  totalReferrals: {
+    type: Number,
+    default: 0,
+    min: [0, 'Total referrals cannot be negative'],
+  },
+  lifetimeReferralEarnings: {
+    type: Number,
+    default: 0.00,
+    min: [0, 'Lifetime referral earnings cannot be negative'],
+  },
+  pendingCommission: {
+    type: Number,
+    default: 0.00,
+    min: [0, 'Pending commission cannot be negative'],
+  },
   // Withdrawal tracking
   withdrawalCount: {
     type: Number,
@@ -588,20 +603,27 @@ userSchema.methods.calculateRealTimeEarnings = function() {
  * @param {Array} directReferrals - Array of direct referral users
  * @returns {Number} Daily commission earnings
  */
-userSchema.methods.calculateDailyReferralCommission = function(directReferrals = []) {
+userSchema.methods.calculateDailyReferralCommission = async function(directReferrals = []) {
   const commissionRate = this.getCommissionRate(); // Direct commission rate based on referral level
-  
+
   if (commissionRate === 0) return 0; // Level 1 gets no commission
-  
-  // Sum of all referrals' daily earnings
-  const totalReferralDailyEarnings = directReferrals.reduce((sum, referral) => {
-    return sum + referral.getDailyEarnings();
-  }, 0);
-  
+
+  // Sum of all referrals' daily earnings (handle async getDailyEarnings)
+  const earningsPromises = directReferrals.map(async (referral) => {
+    try {
+      const val = await referral.getDailyEarnings();
+      return typeof val === 'number' ? val : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+
+  const earningsArray = await Promise.all(earningsPromises);
+  const totalReferralDailyEarnings = earningsArray.reduce((sum, v) => sum + v, 0);
+
   // Daily commission = Commission rate × Total referrals' daily earnings
-  // Example: 15% × $10 daily earnings = $1.50 daily commission
   const dailyCommission = totalReferralDailyEarnings * commissionRate;
-  
+
   return dailyCommission;
 };
 
@@ -611,20 +633,27 @@ userSchema.methods.calculateDailyReferralCommission = function(directReferrals =
  * @param {Array} indirectReferrals - Array of indirect referral users (referrals of your referrals)
  * @returns {Number} Daily indirect commission earnings
  */
-userSchema.methods.calculateDailyIndirectReferralCommission = function(indirectReferrals = []) {
+userSchema.methods.calculateDailyIndirectReferralCommission = async function(indirectReferrals = []) {
   const indirectCommissionRate = this.indirectCommissionRate; // Indirect commission rate based on referral level
-  
+
   if (indirectCommissionRate === 0) return 0; // Level 1 gets no commission
-  
-  // Sum of all indirect referrals' daily earnings
-  const totalIndirectReferralDailyEarnings = indirectReferrals.reduce((sum, referral) => {
-    return sum + referral.getDailyEarnings();
-  }, 0);
-  
+
+  // Sum of all indirect referrals' daily earnings (handle async getDailyEarnings)
+  const earningsPromises = indirectReferrals.map(async (referral) => {
+    try {
+      const val = await referral.getDailyEarnings();
+      return typeof val === 'number' ? val : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+
+  const earningsArray = await Promise.all(earningsPromises);
+  const totalIndirectReferralDailyEarnings = earningsArray.reduce((sum, v) => sum + v, 0);
+
   // Daily indirect commission = Indirect commission rate × Total indirect referrals' daily earnings
-  // Example: 2% × $50 daily earnings = $1.00 daily indirect commission
   const dailyIndirectCommission = totalIndirectReferralDailyEarnings * indirectCommissionRate;
-  
+
   return dailyIndirectCommission;
 };
 
