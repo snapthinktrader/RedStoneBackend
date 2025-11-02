@@ -494,9 +494,10 @@ router.get('/stats', auth, async (req, res) => {
         const deposit = ref.totalDeposit || 0;
         if (deposit >= 50) {
           upperCount++;
-        } else {
+        } else if (deposit >= 15 && deposit < 50) {
           lowerCount++;
         }
+        // Note: Deposits $0-$14 don't count in any track
       });
 
       // Update counts
@@ -860,9 +861,11 @@ router.post('/initialize-milestones', auth, async (req, res) => {
       if (deposit >= 50) {
         upperCount++;
         console.log(`  ✓ ${ref.name || ref.email}: $${deposit} → Upper Track`);
-      } else {
+      } else if (deposit >= 15 && deposit < 50) {
         lowerCount++;
         console.log(`  ✓ ${ref.name || ref.email}: $${deposit} → Lower Track`);
+      } else {
+        console.log(`  ✓ ${ref.name || ref.email}: $${deposit} → No Track (< $15)`);
       }
     });
 
