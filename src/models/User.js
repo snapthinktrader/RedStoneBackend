@@ -531,15 +531,65 @@ userSchema.methods.checkMilestoneBonus = function() {
 
 /**
  * Update milestone tracking when referral makes a deposit
- * @param {Number} depositAmount - Amount deposited by referral
- * DEPRECATED: This method incorrectly counts deposits instead of unique referrals
- * Milestone tracking is now handled by the /stats endpoint auto-initialization
+ * Recalculates counts based on actual referral totals (not per-deposit)
  */
-userSchema.methods.updateMilestoneTracking = function(depositAmount) {
-  // DO NOTHING - milestone tracking is now handled by the /stats endpoint
-  // which correctly counts unique referrals by their total deposits
-  console.log(`   ⚠️  updateMilestoneTracking called but ignored - use /stats endpoint for accurate counting`);
+userSchema.methods.updateMilestoneTracking = async function(depositAmount) {
+  // Get the referrer (parent user) who needs milestone update
+  const User = this.constructor;
+  
+  if (!this.referredBy) {
+    return; // This user has no referrer
+  }
+  
+  // Get the parent user
+  const parent = await User.findById(this.referredBy);
+  if (!parent) {
+    return;
+  }
+  
+  // Initialize milestone tracking if needed
+  if (!parent.milestoneTracking) {
+    parent.milestoneTracking = {
+      lowerTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] },
+      upperTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] }
+    };
+  }
+  
+  // Get all referrals to recalculate counts
+  const allReferrals = await User.find({
+    referredBy: parent._id,
+    isActive: true
+  }).select('totalDeposit');
+  
+  // Count referrals by track using correct ranges
+  let lowerCount = 0;
+  let upperCount = 0;
+  
+  allReferrals.forEach(ref => {
+    const deposit = ref.totalDeposit || 0;
+    if (deposit >= 50) {
+      upperCount++;
+    } else if (deposit >= 15 && deposit < 50) {
+      lowerCount++;
+    }
+    // Deposits < $15 don't count in any track
+  });
+  
+  // Update counts
+  parent.milestoneTracking.lowerTrack.count = lowerCount;
+  parent.milestoneTracking.upperTrack.count = upperCount;
+  
+  await parent.save();
+  
+  console.log(`   ✅ Updated milestone tracking for ${parent.email}: Lower=${lowerCount}, Upper=${upperCount}`);
 };
+
+/**
+ * Calculate real-time earnings based on elapsed time since last update
+ * Uses per-deposit/transaction calculation for accurate compound interest
+ * Looks at both Deposit table and Transaction records (DEPOSIT type)
+ * @returns {Object} { calculatedBalance, pendingEarnings, lastUpdate }
+```
 
 /**
  * Calculate real-time earnings based on elapsed time since last update
