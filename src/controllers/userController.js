@@ -17,7 +17,7 @@ class UserController {
       }
 
       // Calculate real-time earnings from own deposits
-      const earningsData = user.calculateRealTimeEarnings();
+      const earningsData = await user.calculateRealTimeEarnings();
       
       // Calculate real-time referral commission earnings
       let referralCommissionData;
