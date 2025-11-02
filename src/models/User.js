@@ -700,8 +700,13 @@ userSchema.methods.calculateRealTimeReferralCommission = async function() {
   const baseDailyIndirectCommission = this.calculateDailyIndirectReferralCommission(indirectReferrals);
   
   // Calculate pending commission over elapsed time (simple interest)
-  const pendingCommission = baseDailyCommission * (elapsedSeconds / SECONDS_PER_DAY);
+  const pendingCommissionSinceUpdate = baseDailyCommission * (elapsedSeconds / SECONDS_PER_DAY);
   const pendingIndirectCommission = baseDailyIndirectCommission * (elapsedSeconds / SECONDS_PER_DAY);
+  
+  // Add stored lifetime earnings to get TOTAL pending commission
+  // lifetimeReferralEarnings includes all historical commission earnings
+  const storedLifetimeEarnings = this.lifetimeReferralEarnings || 0;
+  const totalPendingCommission = storedLifetimeEarnings + pendingCommissionSinceUpdate;
   
   // Calculate total daily earnings from all referrals for reporting
   const totalReferralDailyEarnings = directReferrals.reduce((sum, referral) => {
@@ -713,7 +718,7 @@ userSchema.methods.calculateRealTimeReferralCommission = async function() {
   }, 0);
   
   return {
-    pendingCommission,
+    pendingCommission: totalPendingCommission, // Total lifetime + pending since last update
     pendingIndirectCommission,
     elapsedSeconds,
     dailyCommissionRate: baseDailyCommission,
