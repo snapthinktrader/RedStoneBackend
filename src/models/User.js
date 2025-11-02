@@ -412,11 +412,11 @@ userSchema.methods.getDailyEarnings = async function() {
   // If no wallet balance, no earnings
   if (!this.walletBalance || this.walletBalance <= 0) return 0;
   
-  // Get all confirmed deposits for this user
+  // Get all confirmed/completed deposits for this user
   const Deposit = require('./Deposit');
   const deposits = await Deposit.find({
     userId: this._id,
-    status: 'CONFIRMED',
+    status: { $in: ['CONFIRMED', 'COMPLETED'] }, // Accept both CONFIRMED and COMPLETED
     balanceUpdated: true
   }).select('amount processedAt createdAt').sort({ processedAt: 1 });
   
@@ -554,45 +554,127 @@ userSchema.methods.updateMilestoneTracking = function(depositAmount) {
 
 /**
  * Calculate real-time earnings based on elapsed time since last update
- * Uses deposit-based daily earning rates from recheck.txt
+ * Uses per-deposit/transaction calculation for accurate compound interest
+ * Looks at both Deposit table and Transaction records (DEPOSIT type)
  * @returns {Object} { calculatedBalance, pendingEarnings, lastUpdate }
  */
-userSchema.methods.calculateRealTimeEarnings = function() {
-  const dailyRate = this.dailyEarningRate; // Deposit-based rate from virtual field
-  const SECONDS_PER_DAY = 86400;
-  const RATE_PER_SECOND = dailyRate / SECONDS_PER_DAY;
-  
+userSchema.methods.calculateRealTimeEarnings = async function() {
   const now = new Date();
-  const lastUpdate = this.lastEarningUpdate || this.createdAt || now;
-  const elapsedSeconds = Math.floor((now - lastUpdate) / 1000);
+  const SECONDS_PER_DAY = 86400;
   
-  // If no balance or no time elapsed, return current state
-  if (!this.walletBalance || elapsedSeconds <= 0) {
+  // Get all transactions (deposits, bonuses) in chronological order
+  const Transaction = require('./Transaction');
+  const transactions = await Transaction.find({
+    userId: this._id,
+    type: { $in: ['DEPOSIT', 'PROMOTIONAL_BONUS', 'MILESTONE_BONUS'] },
+    status: 'COMPLETED'
+  }).select('type amount createdAt description').sort({ createdAt: 1 });
+  
+  if (transactions.length === 0) {
     return {
       calculatedBalance: this.walletBalance || 0,
       pendingEarnings: 0,
       elapsedSeconds: 0,
-      lastUpdate: lastUpdate,
+      lastUpdate: this.createdAt,
       currentTime: now,
-      dailyRate: dailyRate,
-      ratePerSecond: RATE_PER_SECOND
+      dailyRate: 0,
+      ratePerSecond: 0
     };
   }
   
-  // Calculate earnings based on current wallet balance
-  // The balance grows exponentially: Balance(t) = Balance(0) * (1 + rate)^(seconds)
-  // For small rates and short time periods, we can approximate: Balance(0) * (1 + rate * seconds)
-  const compoundFactor = Math.pow(1 + RATE_PER_SECOND, elapsedSeconds);
-  const newEarnings = this.walletBalance * (compoundFactor - 1);
+  // Helper function to determine earning rate based on total deposits
+  const getEarningRate = (totalDeposits) => {
+    if (totalDeposits >= 10000) return 0.05;      // Radiant: 5%
+    if (totalDeposits >= 5000) return 0.045;      // Ascendant: 4.5%
+    if (totalDeposits >= 3500) return 0.04;       // Diamond: 4%
+    if (totalDeposits >= 2000) return 0.035;      // Platinum: 3.5%
+    if (totalDeposits >= 1000) return 0.03;       // Gold: 3%
+    if (totalDeposits >= 300) return 0.025;       // Silver: 2.5%
+    if (totalDeposits >= 50) return 0.02;         // Bronze: 2%
+    if (totalDeposits >= 15) return 0.02;         // Basic: 2%
+    return 0;
+  };
+  
+  // Calculate referral commission per second
+  const totalReferrals = this.totalReferrals || 0;
+  let commissionPerSecond = 0;
+  
+  if (totalReferrals > 0) {
+    // Get all direct referrals
+    const directReferrals = await this.constructor.find({
+      referredBy: this._id
+    }).select('totalDeposit');
+    
+    // Calculate 15% of each referral's per-second earnings
+    for (const referral of directReferrals) {
+      const referralDeposit = referral.totalDeposit || 0;
+      if (referralDeposit > 0) {
+        const referralDailyRate = getEarningRate(referralDeposit);
+        const referralPerSecond = (referralDeposit * referralDailyRate) / SECONDS_PER_DAY;
+        commissionPerSecond += referralPerSecond * 0.15; // 15% commission
+      }
+    }
+  }
+  
+  // Process timeline events
+  let balance = 0;
+  let totalDeposits = 0;
+  let currentRate = 0;
+  let totalEarnings = 0;
+  
+  for (let i = 0; i < transactions.length; i++) {
+    const event = transactions[i];
+    const nextEvent = transactions[i + 1];
+    const eventTime = new Date(event.createdAt);
+    const nextTime = nextEvent ? new Date(nextEvent.createdAt) : now;
+    
+    // Update balance based on event type
+    if (event.type === 'DEPOSIT') {
+      totalDeposits += event.amount;
+      currentRate = getEarningRate(totalDeposits);
+    }
+    balance += event.amount;
+    
+    // Calculate earnings between this event and next
+    const periodSeconds = Math.floor((nextTime - eventTime) / 1000);
+    
+    if (periodSeconds > 0 && balance > 0) {
+      const ratePerSecond = currentRate / SECONDS_PER_DAY;
+      
+      // Compound earnings on current balance
+      const compoundFactor = Math.pow(1 + ratePerSecond, periodSeconds);
+      const ownEarnings = balance * (compoundFactor - 1);
+      
+      // Referral commission accumulation (linear for now, can be compounded)
+      const referralEarnings = commissionPerSecond * periodSeconds;
+      
+      // For more accurate compound on referral commission stream:
+      // The commission flows in continuously, so we compound it
+      let referralEarningsCompounded = 0;
+      if (commissionPerSecond > 0) {
+        // Integral of compounding stream: C * [(1+r)^t - 1] / ln(1+r)
+        // Approximation: C * t * (1 + r*t/2) for small r
+        const effectiveRate = ratePerSecond * periodSeconds / 2;
+        referralEarningsCompounded = referralEarnings * (1 + effectiveRate);
+      }
+      
+      const periodEarnings = ownEarnings + referralEarningsCompounded;
+      totalEarnings += periodEarnings;
+      balance += periodEarnings;
+    }
+  }
   
   return {
-    calculatedBalance: this.walletBalance + newEarnings,
-    pendingEarnings: newEarnings,
-    elapsedSeconds: elapsedSeconds,
-    lastUpdate: lastUpdate,
+    calculatedBalance: balance,
+    pendingEarnings: totalEarnings,
+    elapsedSeconds: Math.floor((now - new Date(transactions[0].createdAt)) / 1000),
+    lastUpdate: new Date(transactions[0].createdAt),
     currentTime: now,
-    dailyRate: dailyRate,
-    ratePerSecond: RATE_PER_SECOND
+    dailyRate: currentRate,
+    ratePerSecond: currentRate / SECONDS_PER_DAY,
+    depositsFound: transactions.filter(t => t.type === 'DEPOSIT').length,
+    totalDepositAmount: totalDeposits,
+    commissionPerSecond: commissionPerSecond
   };
 };
 
