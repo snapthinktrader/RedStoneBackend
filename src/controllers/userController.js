@@ -38,8 +38,10 @@ class UserController {
         };
       }
 
-      // Ensure values are numbers, not NaN
-      const safePendingCommission = isNaN(referralCommissionData.pendingCommission) ? 0 : referralCommissionData.pendingCommission;
+      // Ensure values are numbers, not NaN, null, or undefined
+      const safePendingCommission = (referralCommissionData.pendingCommission == null || isNaN(referralCommissionData.pendingCommission)) 
+        ? (user.pendingCommission || 0) 
+        : referralCommissionData.pendingCommission;
       const safePendingEarnings = isNaN(earningsData.pendingEarnings) ? 0 : earningsData.pendingEarnings;
       const safeCalculatedBalance = isNaN(earningsData.calculatedBalance) ? user.walletBalance : earningsData.calculatedBalance;
 
@@ -62,7 +64,7 @@ class UserController {
             storedBalance: user.walletBalance, // Original stored balance
             pendingEarnings: totalPendingEarnings, // Total earnings since last update (own + referral)
             pendingOwnEarnings: earningsData.pendingEarnings, // Own wallet earnings
-            pendingReferralCommission: referralCommissionData.pendingCommission, // Referral commission earnings
+            pendingReferralCommission: safePendingCommission, // Referral commission earnings (safe value)
             pendingIndirectCommission: referralCommissionData.pendingIndirectCommission || 0, // Indirect commission earnings
             dailyReferralCommission: referralCommissionData.dailyCommissionRate, // Daily referral commission rate
             dailyIndirectCommission: referralCommissionData.dailyIndirectCommissionRate || 0, // Daily indirect commission rate
