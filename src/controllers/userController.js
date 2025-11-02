@@ -20,11 +20,32 @@ class UserController {
       const earningsData = user.calculateRealTimeEarnings();
       
       // Calculate real-time referral commission earnings
-      const referralCommissionData = await user.calculateRealTimeReferralCommission();
+      let referralCommissionData;
+      try {
+        referralCommissionData = await user.calculateRealTimeReferralCommission();
+      } catch (error) {
+        logger.error('Error calculating referral commission:', error);
+        // Fallback to stored values if real-time calculation fails
+        referralCommissionData = {
+          pendingCommission: user.pendingCommission || 0,
+          pendingIndirectCommission: 0,
+          dailyCommissionRate: 0,
+          dailyIndirectCommissionRate: 0,
+          totalReferralDailyEarnings: 0,
+          totalIndirectReferralDailyEarnings: 0,
+          referralCount: user.totalReferrals || user.directReferrals || 0,
+          indirectReferralCount: user.indirectReferrals || 0
+        };
+      }
+
+      // Ensure values are numbers, not NaN
+      const safePendingCommission = isNaN(referralCommissionData.pendingCommission) ? 0 : referralCommissionData.pendingCommission;
+      const safePendingEarnings = isNaN(earningsData.pendingEarnings) ? 0 : earningsData.pendingEarnings;
+      const safeCalculatedBalance = isNaN(earningsData.calculatedBalance) ? user.walletBalance : earningsData.calculatedBalance;
 
       // Total real-time earnings = own earnings + referral commissions
-      const totalPendingEarnings = earningsData.pendingEarnings + referralCommissionData.pendingCommission;
-      const totalCalculatedBalance = earningsData.calculatedBalance + referralCommissionData.pendingCommission;
+      const totalPendingEarnings = safePendingEarnings + safePendingCommission;
+      const totalCalculatedBalance = safeCalculatedBalance + safePendingCommission;
 
       // Calculate next milestone for Flutter app
       const nextMilestone = UserController.getNextMilestone(user.directReferrals || 0);
