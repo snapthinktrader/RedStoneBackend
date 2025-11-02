@@ -235,6 +235,10 @@ router.get('/user-referrals', auth, async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
+    // Get parent user with stored lifetime earnings
+    const parentUser = await User.findById(req.user.userId);
+    const storedLifetimeEarnings = parentUser?.lifetimeReferralEarnings || 0;
+
     // Get direct referrals with earnings
     const directReferralsRaw = await User.find({
       referredBy: req.user.userId,
@@ -244,6 +248,9 @@ router.get('/user-referrals', auth, async (req, res) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit);
+
+    // Calculate total wallet balance of all referrals for proportional distribution
+    const totalReferralBalance = directReferralsRaw.reduce((sum, ref) => sum + (ref.walletBalance || 0), 0);
 
     // Calculate earnings from each referred user
     const referrals = await Promise.all(directReferralsRaw.map(async (referral) => {
@@ -284,42 +291,42 @@ router.get('/user-referrals', auth, async (req, res) => {
       const myCommissionPerSecond = referralEarningsPerSecond * myCommissionRate; // 15% of their per-second earnings
       const myCommissionPerDay = myCommissionPerSecond * SECONDS_PER_DAY; // 15% of their daily earnings
       
-      // Calculate accumulated commission from when they STARTED EARNING (first deposit), not signup
-      // Each deposit earns separately from its own deposit time
-      // Example: $99 deposited 11 days ago earns for 11 days
-      //          $9999 deposited today only earns for today's duration
-      const Deposit = require('../models/Deposit');
-      const referralDeposits = await Deposit.find({
-        userId: referral._id,
-        status: 'CONFIRMED',
-        balanceUpdated: true
-      }).sort({ processedAt: 1 });
-
-      let accumulatedCommission = 0;
-      const now = new Date();
-      
-      // Calculate commission from each deposit separately (SIMPLE interest, not compound)
-      // Each deposit earns 2% daily from its own start time
-      for (const deposit of referralDeposits) {
-        const depositStartTime = deposit.processedAt || deposit.createdAt;
-        const secondsSinceDeposit = Math.floor((now - depositStartTime) / 1000);
-        
-        if (secondsSinceDeposit <= 0) continue; // Skip future deposits
-        
-        // Calculate earnings from this specific deposit using SIMPLE interest
-        // Earnings = Principal × Rate × Time
-        const dailyRate = refUserModel ? refUserModel.dailyEarningRate : 0.02; // 2% daily
-        const ratePerSecond = dailyRate / SECONDS_PER_DAY;
-        const earningsFromThisDeposit = deposit.amount * ratePerSecond * secondsSinceDeposit;
-        
-        // My commission from this deposit's earnings (15% of their earnings)
-        const commissionFromThisDeposit = earningsFromThisDeposit * myCommissionRate;
-        accumulatedCommission += commissionFromThisDeposit;
+      // Use stored lifetime earnings distributed proportionally by referral wallet balance
+      // This ensures we show the CORRECT lifetime earnings even if deposit records are incomplete
+      // Formula: (This Referral's Balance / Total All Referrals' Balance) × Total Stored Lifetime Earnings
+      let totalLifetimeEarnings = 0;
+      if (totalReferralBalance > 0 && storedLifetimeEarnings > 0) {
+        const proportionOfTotal = referral.walletBalance / totalReferralBalance;
+        totalLifetimeEarnings = proportionOfTotal * storedLifetimeEarnings;
       }
       
-      // Total lifetime earnings = accumulated commission from all deposits' growth
-      // Note: We removed transaction-based commissions, so only per-second earnings commissions count
-      const totalLifetimeEarnings = accumulatedCommission;
+      // Fallback: Calculate from deposits if no stored value available (backward compatibility)
+      if (storedLifetimeEarnings === 0) {
+        const Deposit = require('../models/Deposit');
+        const referralDeposits = await Deposit.find({
+          userId: referral._id,
+          status: 'CONFIRMED',
+          balanceUpdated: true
+        }).sort({ processedAt: 1 });
+
+        let accumulatedCommission = 0;
+        const now = new Date();
+        
+        for (const deposit of referralDeposits) {
+          const depositStartTime = deposit.processedAt || deposit.createdAt;
+          const secondsSinceDeposit = Math.floor((now - depositStartTime) / 1000);
+          
+          if (secondsSinceDeposit <= 0) continue;
+          
+          const dailyRate = refUserModel ? refUserModel.dailyEarningRate : 0.02;
+          const ratePerSecond = dailyRate / SECONDS_PER_DAY;
+          const earningsFromThisDeposit = deposit.amount * ratePerSecond * secondsSinceDeposit;
+          const commissionFromThisDeposit = earningsFromThisDeposit * myCommissionRate;
+          accumulatedCommission += commissionFromThisDeposit;
+        }
+        
+        totalLifetimeEarnings = accumulatedCommission;
+      }
 
       // Determine track based on deposit amount
       const track = referral.totalDeposit >= 50 ? 'upper' : 'lower';
@@ -355,15 +362,17 @@ router.get('/user-referrals', auth, async (req, res) => {
         myCommissionRate: myCommissionRate, // Your commission percentage (15%)
         lastEarningUpdate: referralRealTimeData.lastUpdate, // When their earnings were last updated
         myEarningsFromThisUser: {
-          total: totalLifetimeEarnings, // Total lifetime commission from all their deposits' earnings
-          accumulatedCommissions: accumulatedCommission, // Commission calculated from each deposit's earning period
+          total: totalLifetimeEarnings, // Total lifetime commission (from stored value, distributed proportionally)
           commissionCount: earnings.transactionCount,
           lastEarningDate: earnings.lastEarning,
           calculationDetails: {
-            totalDeposits: referralDeposits.length,
+            usedStoredValue: storedLifetimeEarnings > 0,
+            totalStoredEarnings: storedLifetimeEarnings,
+            proportionOfTotal: totalReferralBalance > 0 ? (referral.walletBalance / totalReferralBalance) : 0,
             myCommissionRate: myCommissionRate,
-            calculationMethod: 'per-deposit-simple-interest',
-            note: 'Each deposit earns separately from its own confirmation time'
+            note: storedLifetimeEarnings > 0 
+              ? 'Using stored lifetime earnings distributed by referral balance proportion'
+              : 'Calculated from deposit timestamps (fallback)'
           }
         }
       };
