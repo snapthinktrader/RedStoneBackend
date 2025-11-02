@@ -532,32 +532,24 @@ userSchema.methods.checkMilestoneBonus = function() {
 /**
  * Update milestone tracking when referral makes a deposit
  * Recalculates counts based on actual referral totals (not per-deposit)
+ * Should be called on the REFERRER (parent), not the referral
  */
 userSchema.methods.updateMilestoneTracking = async function(depositAmount) {
-  // Get the referrer (parent user) who needs milestone update
+  // This method is called on the REFERRER (parent user)
   const User = this.constructor;
-  
-  if (!this.referredBy) {
-    return; // This user has no referrer
-  }
-  
-  // Get the parent user
-  const parent = await User.findById(this.referredBy);
-  if (!parent) {
-    return;
-  }
+  const referrer = this; // The parent whose milestone counts need updating
   
   // Initialize milestone tracking if needed
-  if (!parent.milestoneTracking) {
-    parent.milestoneTracking = {
+  if (!referrer.milestoneTracking) {
+    referrer.milestoneTracking = {
       lowerTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] },
       upperTrack: { count: 0, lastMilestoneClaimed: 0, claimedMilestones: [] }
     };
   }
   
-  // Get all referrals to recalculate counts
+  // Get all referrals of this parent to recalculate counts
   const allReferrals = await User.find({
-    referredBy: parent._id,
+    referredBy: referrer._id,
     isActive: true
   }).select('totalDeposit');
   
@@ -576,12 +568,12 @@ userSchema.methods.updateMilestoneTracking = async function(depositAmount) {
   });
   
   // Update counts
-  parent.milestoneTracking.lowerTrack.count = lowerCount;
-  parent.milestoneTracking.upperTrack.count = upperCount;
+  referrer.milestoneTracking.lowerTrack.count = lowerCount;
+  referrer.milestoneTracking.upperTrack.count = upperCount;
   
-  await parent.save();
+  await referrer.save();
   
-  console.log(`   ✅ Updated milestone tracking for ${parent.email}: Lower=${lowerCount}, Upper=${upperCount}`);
+  console.log(`   ✅ Updated milestone tracking for ${referrer.email}: Lower=${lowerCount}, Upper=${upperCount}`);
 };
 
 /**
