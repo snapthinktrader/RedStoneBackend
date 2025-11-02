@@ -561,6 +561,7 @@ userSchema.methods.updateMilestoneTracking = function(depositAmount) {
 userSchema.methods.calculateRealTimeEarnings = async function() {
   const now = new Date();
   const SECONDS_PER_DAY = 86400;
+  const myCommissionRate = this.getCommissionRate(); // 15% commission rate
   
   // Get all transactions (deposits, bonuses) in chronological order
   const Transaction = require('./Transaction');
@@ -595,32 +596,50 @@ userSchema.methods.calculateRealTimeEarnings = async function() {
     return 0;
   };
   
-  // Calculate referral commission per second
-  const totalReferrals = this.totalReferrals || 0;
+  // Calculate CONSTANT commission rate based on referrals' STORED balances
+  // Commission = % of (referral's stored balance × their daily rate)
   let commissionPerSecond = 0;
+  let firstReferralDepositTime = null;
   
-  if (totalReferrals > 0) {
-    // Get all direct referrals
-    const directReferrals = await this.constructor.find({
-      referredBy: this._id
-    }).select('totalDeposit');
+  if (myCommissionRate > 0 && this.totalReferrals > 0) {
+    const refs = await this.constructor.find({
+      referredBy: this._id,
+      isActive: true
+    }).select('walletBalance totalDeposit');
     
-    // Calculate 15% of each referral's per-second earnings
-    for (const referral of directReferrals) {
-      const referralDeposit = referral.totalDeposit || 0;
-      if (referralDeposit > 0) {
-        const referralDailyRate = getEarningRate(referralDeposit);
-        const referralPerSecond = (referralDeposit * referralDailyRate) / SECONDS_PER_DAY;
-        commissionPerSecond += referralPerSecond * 0.15; // 15% commission
+    // Get first referral deposit time FIRST
+    const Transaction = require('./Transaction');
+    const firstRefDeposit = await Transaction.findOne({
+      userId: { $in: refs.map(r => r._id) },
+      type: 'DEPOSIT',
+      status: 'COMPLETED'
+    }).sort({ createdAt: 1 }).select('createdAt');
+    
+    if (firstRefDeposit) {
+      firstReferralDepositTime = new Date(firstRefDeposit.createdAt);
+      
+      // Only calculate commission if referrals have deposited
+      for (const ref of refs) {
+        if (ref.totalDeposit > 0) {
+          const refDailyRate = getEarningRate(ref.totalDeposit);
+          const refEarningsPerDay = ref.walletBalance * refDailyRate;
+          const myCommissionPerDay = refEarningsPerDay * myCommissionRate;
+          commissionPerSecond += myCommissionPerDay / SECONDS_PER_DAY;
+        }
       }
     }
   }
   
-  // Process timeline events
+  // TIMELINE-BASED CALCULATION
+  // Process each transaction event and compound earnings between events
   let balance = 0;
   let totalDeposits = 0;
   let currentRate = 0;
-  let totalEarnings = 0;
+  let totalOwnEarnings = 0;
+  let totalCommissionEarnings = 0;
+  
+  const yourFirstTxTime = new Date(transactions[0].createdAt);
+  const commissionStartTime = firstReferralDepositTime || new Date('2099-01-01'); // Far future if no referrals
   
   for (let i = 0; i < transactions.length; i++) {
     const event = transactions[i];
@@ -628,53 +647,69 @@ userSchema.methods.calculateRealTimeEarnings = async function() {
     const eventTime = new Date(event.createdAt);
     const nextTime = nextEvent ? new Date(nextEvent.createdAt) : now;
     
-    // Update balance based on event type
+    // Process the transaction event
     if (event.type === 'DEPOSIT') {
       totalDeposits += event.amount;
       currentRate = getEarningRate(totalDeposits);
     }
-    balance += event.amount;
+    balance += event.amount; // Add transaction amount to balance
     
-    // Calculate earnings between this event and next
+    // Calculate compound earnings for the period UNTIL the next event (or now)
     const periodSeconds = Math.floor((nextTime - eventTime) / 1000);
     
-    if (periodSeconds > 0 && balance > 0) {
+    if (periodSeconds > 0) {
       const ratePerSecond = currentRate / SECONDS_PER_DAY;
       
-      // Compound earnings on current balance
-      const compoundFactor = Math.pow(1 + ratePerSecond, periodSeconds);
-      const ownEarnings = balance * (compoundFactor - 1);
-      
-      // Referral commission accumulation (linear for now, can be compounded)
-      const referralEarnings = commissionPerSecond * periodSeconds;
-      
-      // For more accurate compound on referral commission stream:
-      // The commission flows in continuously, so we compound it
-      let referralEarningsCompounded = 0;
-      if (commissionPerSecond > 0) {
-        // Integral of compounding stream: C * [(1+r)^t - 1] / ln(1+r)
-        // Approximation: C * t * (1 + r*t/2) for small r
-        const effectiveRate = ratePerSecond * periodSeconds / 2;
-        referralEarningsCompounded = referralEarnings * (1 + effectiveRate);
+      // Part 1: Your own balance compounds at your rate
+      // Formula: Balance × [(1 + rate_per_second)^seconds - 1]
+      let principalGrowth = 0;
+      if (ratePerSecond > 0 && balance > 0) {
+        const compoundFactor = Math.pow(1 + ratePerSecond, periodSeconds);
+        principalGrowth = balance * (compoundFactor - 1);
+        totalOwnEarnings += principalGrowth;
+        balance += principalGrowth; // Add to balance before calculating commission
       }
       
-      const periodEarnings = ownEarnings + referralEarningsCompounded;
-      totalEarnings += periodEarnings;
-      balance += periodEarnings;
+      // Part 2: Referral commission (only after they deposit)
+      // Commission flows as a stream and compounds with YOUR rate
+      // Formula: C × [((1 + r)^t - 1) / r] where C = commission per second, r = your rate
+      let commissionStreamValue = 0;
+      if (commissionPerSecond > 0 && nextTime > commissionStartTime) {
+        // Calculate overlap period (only the time after commission starts)
+        const overlapStart = eventTime > commissionStartTime ? eventTime : commissionStartTime;
+        const overlapSeconds = Math.floor((nextTime - overlapStart) / 1000);
+        
+        if (overlapSeconds > 0) {
+          if (ratePerSecond > 0) {
+            // Commission stream compounds at YOUR rate
+            const compoundFactor = Math.pow(1 + ratePerSecond, overlapSeconds);
+            commissionStreamValue = commissionPerSecond * (compoundFactor - 1) / ratePerSecond;
+          } else {
+            // No compounding if your rate is 0
+            commissionStreamValue = commissionPerSecond * overlapSeconds;
+          }
+          totalCommissionEarnings += commissionStreamValue;
+          balance += commissionStreamValue; // Add commission to balance
+        }
+      }
     }
   }
+  
+  const totalEarnings = totalOwnEarnings + totalCommissionEarnings;
   
   return {
     calculatedBalance: balance,
     pendingEarnings: totalEarnings,
-    elapsedSeconds: Math.floor((now - new Date(transactions[0].createdAt)) / 1000),
-    lastUpdate: new Date(transactions[0].createdAt),
+    ownEarnings: totalOwnEarnings,
+    referralCommission: totalCommissionEarnings,
+    elapsedSeconds: Math.floor((now - yourFirstTxTime) / 1000),
+    lastUpdate: yourFirstTxTime,
     currentTime: now,
     dailyRate: currentRate,
     ratePerSecond: currentRate / SECONDS_PER_DAY,
     depositsFound: transactions.filter(t => t.type === 'DEPOSIT').length,
     totalDepositAmount: totalDeposits,
-    commissionPerSecond: commissionPerSecond
+    commissionPerDay: commissionPerSecond * SECONDS_PER_DAY
   };
 };
 
@@ -741,73 +776,135 @@ userSchema.methods.calculateDailyIndirectReferralCommission = async function(ind
 
 /**
  * Calculate real-time referral commission earnings based on elapsed time
- * New system: Commission based on % of referrals' daily earnings
+ * Uses timeline-based calculation matching referral's actual earnings
  * @returns {Object} { pendingCommission, pendingIndirectCommission, dailyCommissionRate, etc. }
  */
 userSchema.methods.calculateRealTimeReferralCommission = async function() {
   const SECONDS_PER_DAY = 86400;
-  
   const now = new Date();
-  const lastUpdate = this.lastEarningUpdate || this.createdAt || now;
-  const elapsedSeconds = Math.floor((now - lastUpdate) / 1000);
+  const myCommissionRate = this.getCommissionRate(); // Your 15% commission rate
   
-  if (elapsedSeconds <= 0) {
+  if (myCommissionRate === 0) {
     return {
       pendingCommission: 0,
       pendingIndirectCommission: 0,
       elapsedSeconds: 0,
       dailyCommissionRate: 0,
       dailyIndirectCommissionRate: 0,
-      commissionRate: this.getCommissionRate(),
+      commissionRate: 0,
       indirectCommissionRate: this.indirectCommissionRate,
       referralCount: 0,
       indirectReferralCount: 0
     };
   }
   
-  // Get direct referrals with their earning calculations
+  // Get direct referrals
   const User = this.constructor;
   const directReferrals = await User.find({ referredBy: this._id, isActive: true })
-    .select('walletBalance totalDeposit currentLevel');
+    .select('_id walletBalance totalDeposit currentLevel');
+  
+  if (directReferrals.length === 0) {
+    return {
+      pendingCommission: 0,
+      pendingIndirectCommission: 0,
+      elapsedSeconds: 0,
+      dailyCommissionRate: 0,
+      dailyIndirectCommissionRate: 0,
+      commissionRate: myCommissionRate,
+      indirectCommissionRate: this.indirectCommissionRate,
+      referralCount: 0,
+      indirectReferralCount: 0
+    };
+  }
+  
+  // Helper function to get earning rate based on total deposits
+  const getEarningRate = (totalDeposits) => {
+    if (totalDeposits >= 10000) return 0.05;
+    if (totalDeposits >= 5000) return 0.045;
+    if (totalDeposits >= 3500) return 0.04;
+    if (totalDeposits >= 2000) return 0.035;
+    if (totalDeposits >= 1000) return 0.03;
+    if (totalDeposits >= 300) return 0.025;
+    if (totalDeposits >= 50) return 0.02;
+    if (totalDeposits >= 15) return 0.02;
+    return 0;
+  };
+  
+  // Calculate lifetime commission from ALL referrals using timeline-based method
+  const Transaction = require('./Transaction');
+  let totalLifetimeCommission = 0;
+  let totalCurrentDailyCommission = 0;
+  
+  for (const referral of directReferrals) {
+    // Get referral's transaction timeline
+    const referralTransactions = await Transaction.find({
+      userId: referral._id,
+      type: { $in: ['DEPOSIT', 'PROMOTIONAL_BONUS', 'MILESTONE_BONUS'] },
+      status: 'COMPLETED'
+    }).select('type amount createdAt').sort({ createdAt: 1 });
     
-  // Get indirect referrals (referrals of your referrals)
+    if (referralTransactions.length > 0) {
+      let refBalance = 0;
+      let refTotalDeposits = 0;
+      let refCurrentRate = 0;
+      
+      for (let i = 0; i < referralTransactions.length; i++) {
+        const event = referralTransactions[i];
+        const nextEvent = referralTransactions[i + 1];
+        const eventTime = new Date(event.createdAt);
+        const nextTime = nextEvent ? new Date(nextEvent.createdAt) : now;
+        
+        // Update their balance and rate
+        if (event.type === 'DEPOSIT') {
+          refTotalDeposits += event.amount;
+          refCurrentRate = getEarningRate(refTotalDeposits);
+        }
+        refBalance += event.amount;
+        
+        // Calculate earnings between events
+        const periodSeconds = Math.floor((nextTime - eventTime) / 1000);
+        
+        if (periodSeconds > 0 && refBalance > 0 && refCurrentRate > 0) {
+          const refRatePerSecond = refCurrentRate / SECONDS_PER_DAY;
+          
+          // Their compound earnings in this period
+          const compoundFactor = Math.pow(1 + refRatePerSecond, periodSeconds);
+          const refPeriodEarnings = refBalance * (compoundFactor - 1);
+          
+          // Your 15% commission on their earnings
+          const myCommissionThisPeriod = refPeriodEarnings * myCommissionRate;
+          totalLifetimeCommission += myCommissionThisPeriod;
+          
+          // Add their earnings to their balance for next period
+          refBalance += refPeriodEarnings;
+        }
+      }
+      
+      // Calculate current daily commission from this referral
+      if (refBalance > 0 && refCurrentRate > 0) {
+        const refDailyEarnings = refBalance * refCurrentRate;
+        const myDailyCommissionFromThisRef = refDailyEarnings * myCommissionRate;
+        totalCurrentDailyCommission += myDailyCommissionFromThisRef;
+      }
+    }
+  }
+  
+  // Get indirect referrals for stats
   const directReferralIds = directReferrals.map(ref => ref._id);
   const indirectReferrals = await User.find({ 
     referredBy: { $in: directReferralIds }, 
     isActive: true 
-  }).select('walletBalance totalDeposit currentLevel');
-  
-  // Calculate base daily commission amounts
-  const baseDailyCommission = this.calculateDailyReferralCommission(directReferrals);
-  const baseDailyIndirectCommission = this.calculateDailyIndirectReferralCommission(indirectReferrals);
-  
-  // Calculate pending commission over elapsed time (simple interest)
-  const pendingCommissionSinceUpdate = baseDailyCommission * (elapsedSeconds / SECONDS_PER_DAY);
-  const pendingIndirectCommission = baseDailyIndirectCommission * (elapsedSeconds / SECONDS_PER_DAY);
-  
-  // Add stored lifetime earnings to get TOTAL pending commission
-  // lifetimeReferralEarnings includes all historical commission earnings
-  const storedLifetimeEarnings = this.lifetimeReferralEarnings || 0;
-  const totalPendingCommission = storedLifetimeEarnings + pendingCommissionSinceUpdate;
-  
-  // Calculate total daily earnings from all referrals for reporting
-  const totalReferralDailyEarnings = directReferrals.reduce((sum, referral) => {
-    return sum + referral.getDailyEarnings();
-  }, 0);
-  
-  const totalIndirectReferralDailyEarnings = indirectReferrals.reduce((sum, referral) => {
-    return sum + referral.getDailyEarnings();
-  }, 0);
+  }).select('_id');
   
   return {
-    pendingCommission: totalPendingCommission, // Total lifetime + pending since last update
-    pendingIndirectCommission,
-    elapsedSeconds,
-    dailyCommissionRate: baseDailyCommission,
-    dailyIndirectCommissionRate: baseDailyIndirectCommission,
-    totalReferralDailyEarnings,
-    totalIndirectReferralDailyEarnings,
-    commissionRate: this.getCommissionRate(),
+    pendingCommission: totalLifetimeCommission, // Total lifetime commission calculated from timeline
+    pendingIndirectCommission: 0, // Not implemented yet
+    elapsedSeconds: 0,
+    dailyCommissionRate: totalCurrentDailyCommission, // Current daily commission rate
+    dailyIndirectCommissionRate: 0,
+    totalReferralDailyEarnings: 0,
+    totalIndirectReferralDailyEarnings: 0,
+    commissionRate: myCommissionRate,
     indirectCommissionRate: this.indirectCommissionRate,
     referralCount: directReferrals.length,
     indirectReferralCount: indirectReferrals.length
