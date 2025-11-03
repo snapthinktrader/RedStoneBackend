@@ -21,24 +21,15 @@ async function checkMainWallet() {
     const trxAmount = tronWeb.fromSun(trxBalance);
     console.log('💰 TRX Balance:', trxAmount, 'TRX');
     
-    // Get USDT balance using TronScan API (more reliable)
+    // Get USDT balance using contract call
     console.log('🔍 Checking USDT balance...');
     try {
-      const response = await fetch(`https://apilist.tronscan.org/api/account?address=${MAIN_WALLET}`);
-      if (response.ok) {
-        const data = await response.json();
-        const usdtToken = data.trc20token_balances?.find(token => token.tokenId === USDT_CONTRACT);
-        if (usdtToken) {
-          const usdtAmount = (parseFloat(usdtToken.balance) / 1000000).toString();
-          console.log('💵 USDT Balance:', usdtAmount, 'USDT');
-        } else {
-          console.log('💵 USDT Balance: 0 USDT');
-        }
-      } else {
-        console.log('💵 USDT Balance: 0 USDT (TronScan API error)');
-      }
+      const contract = await tronWeb.contract().at(USDT_CONTRACT);
+      const usdtBalance = await contract.balanceOf(MAIN_WALLET).call();
+      const usdtAmount = (parseFloat(usdtBalance.toString()) / 1000000).toFixed(2);
+      console.log('💵 USDT Balance:', usdtAmount, 'USDT');
     } catch (err) {
-      console.log('💵 USDT Balance: 0 USDT (API unavailable)');
+      console.log('💵 USDT Balance: 0 USDT (Error:', err.message, ')');
     }
     
     // Get account info
@@ -58,29 +49,68 @@ async function checkMainWallet() {
       console.log('❌ Account not found or inactive');
     }
     
-    // Get recent transactions using TronScan API
+    // Get recent TRX transactions
     console.log('');
-    console.log('📋 Recent Transactions:');
+    console.log('📋 Recent TRX Transactions:');
     try {
-      const response = await fetch(`https://apilist.tronscan.org/api/transaction?sort=-timestamp&count=true&limit=5&start=0&address=${MAIN_WALLET}`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data && data.data.length > 0) {
-          data.data.forEach((tx, index) => {
-            console.log(`${index + 1}. TX ID: ${tx.hash}`);
-            console.log(`   Type: ${tx.contractType || 'Transfer'}`);
-            console.log(`   Timestamp: ${new Date(tx.timestamp).toLocaleString()}`);
-            console.log(`   Amount: ${tx.amount ? (tx.amount / 1000000) + ' USDT' : 'N/A'}`);
-            console.log('');
-          });
-        } else {
-          console.log('✅ No recent transactions found (wallet clean)');
-        }
+      const trxTxs = await tronWeb.trx.getTransactionsRelated(MAIN_WALLET, 'all', 5);
+      if (trxTxs && trxTxs.length > 0) {
+        trxTxs.forEach((tx, index) => {
+          const type = tx.raw_data?.contract?.[0]?.type || 'Unknown';
+          const timestamp = tx.raw_data?.timestamp || 0;
+          console.log(`${index + 1}. Type: ${type}`);
+          console.log(`   Time: ${new Date(timestamp).toLocaleString()}`);
+          console.log(`   TX: ${tx.txID}`);
+          console.log('');
+        });
       } else {
-        console.log('⚠️  Could not fetch transactions (TronScan API unavailable)');
+        console.log('✅ No recent TRX transactions');
       }
     } catch (txError) {
-      console.log('⚠️  Could not fetch transactions:', txError.message);
+      console.log('⚠️  Could not fetch TRX transactions:', txError.message);
+    }
+    
+    // Get recent USDT (TRC20) transactions
+    console.log('📋 Recent USDT (TRC20) Transactions:');
+    try {
+      const response = await fetch(`https://apilist.tronscan.org/api/token_trc20/transfers?limit=10&start=0&sort=-timestamp&count=true&relatedAddress=${MAIN_WALLET}&contract_address=${USDT_CONTRACT}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.token_transfers && data.token_transfers.length > 0) {
+          let totalIn = 0;
+          let totalOut = 0;
+          
+          data.token_transfers.forEach((tx, index) => {
+            const amount = parseFloat(tx.quant) / 1000000;
+            const isIncoming = tx.to_address === MAIN_WALLET;
+            const direction = isIncoming ? '📥 IN' : '📤 OUT';
+            
+            if (isIncoming) {
+              totalIn += amount;
+            } else {
+              totalOut += amount;
+            }
+            
+            console.log(`${index + 1}. ${direction} ${amount.toFixed(2)} USDT`);
+            console.log(`   From: ${tx.from_address.substring(0, 10)}...`);
+            console.log(`   To: ${tx.to_address.substring(0, 10)}...`);
+            console.log(`   Time: ${new Date(tx.block_timestamp).toLocaleString()}`);
+            console.log('');
+          });
+          
+          console.log('━'.repeat(60));
+          console.log('📊 USDT Transaction Summary:');
+          console.log(`   Total Received: ${totalIn.toFixed(2)} USDT`);
+          console.log(`   Total Sent: ${totalOut.toFixed(2)} USDT`);
+          console.log(`   Net Balance: ${(totalIn - totalOut).toFixed(2)} USDT`);
+        } else {
+          console.log('✅ No recent USDT transactions');
+        }
+      } else {
+        console.log('⚠️  Could not fetch USDT transactions (TronScan API unavailable)');
+      }
+    } catch (txError) {
+      console.log('⚠️  Could not fetch USDT transactions:', txError.message);
     }
     
     console.log('');

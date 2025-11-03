@@ -325,8 +325,9 @@ depositSchema.post('save', async function(doc) {
             if (user.referredBy) {
                 const referrer = await User.findById(user.referredBy);
                 if (referrer) {
-                    // Update milestone tracking based on this referral's deposit amount
-                    referrer.updateMilestoneTracking(doc.amount);
+                    // Update milestone tracking based on this referral's FIRST deposit
+                    // Pass the user object so we can check if it's their first deposit
+                    referrer.updateMilestoneTracking(doc.amount, user);
                     
                     // Start earnings timer if first referral starts earning
                     if (!referrer.lastEarningUpdate) {
@@ -335,7 +336,7 @@ depositSchema.post('save', async function(doc) {
                     }
                     
                     await referrer.save();
-                    console.log(`   ✅ Milestone tracking updated for referrer ${referrer.email}`);
+                    console.log(`   ✅ Milestone tracking processed for referrer ${referrer.email}`);
                 }
             }
             

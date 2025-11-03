@@ -530,13 +530,11 @@ userSchema.methods.checkMilestoneBonus = function() {
 };
 
 /**
- * Update milestone tracking when referral makes a deposit
- * Recalculates counts based on actual referral totals (not per-deposit)
- * Should be called on the REFERRER (parent), not the referral
+ * Update milestone tracking when referral makes FIRST deposit
+ * Simple: Check if this is their first TRANSACTION and increment the right track
+ * Called on the REFERRER (parent) with the referral's deposit amount and user object
  */
-userSchema.methods.updateMilestoneTracking = async function(depositAmount) {
-  // This method is called on the REFERRER (parent user)
-  const User = this.constructor;
+userSchema.methods.updateMilestoneTracking = async function(depositAmount, referralUser) {
   const referrer = this; // The parent whose milestone counts need updating
   
   // Initialize milestone tracking if needed
@@ -547,33 +545,46 @@ userSchema.methods.updateMilestoneTracking = async function(depositAmount) {
     };
   }
   
-  // Get all referrals of this parent to recalculate counts
-  const allReferrals = await User.find({
-    referredBy: referrer._id,
-    isActive: true
-  }).select('totalDeposit');
-  
-  // Count referrals by track using correct ranges
-  let lowerCount = 0;
-  let upperCount = 0;
-  
-  allReferrals.forEach(ref => {
-    const deposit = ref.totalDeposit || 0;
-    if (deposit >= 50) {
-      upperCount++;
-    } else if (deposit >= 15 && deposit < 50) {
-      lowerCount++;
+  // Check if this is the referral's FIRST DEPOSIT TRANSACTION
+  if (referralUser) {
+    // Load Transaction model dynamically to avoid circular dependency
+    const Transaction = require('./Transaction');
+    
+    const depositCount = await Transaction.countDocuments({
+      userId: referralUser._id,
+      type: 'DEPOSIT',
+      status: 'COMPLETED'
+    });
+    
+    // If this is their first deposit transaction (count = 1, just created)
+    if (depositCount === 1) {
+      // Get the first deposit amount from Transaction table (more reliable)
+      const firstDeposit = await Transaction.findOne({
+        userId: referralUser._id,
+        type: 'DEPOSIT',
+        status: 'COMPLETED'
+      }).sort({ createdAt: 1 }).select('amount');
+      
+      const firstDepositAmount = firstDeposit ? firstDeposit.amount : depositAmount;
+      
+      // Determine which track based on FIRST deposit amount
+      if (firstDepositAmount >= 50) {
+        // Upper track ($50+)
+        referrer.milestoneTracking.upperTrack.count++;
+        console.log(`   ✅ Incremented UPPER track for ${referrer.email}: Count=${referrer.milestoneTracking.upperTrack.count} (First deposit: $${firstDepositAmount})`);
+      } else if (firstDepositAmount >= 15 && firstDepositAmount < 50) {
+        // Lower track ($15-$49)
+        referrer.milestoneTracking.lowerTrack.count++;
+        console.log(`   ✅ Incremented LOWER track for ${referrer.email}: Count=${referrer.milestoneTracking.lowerTrack.count} (First deposit: $${firstDepositAmount})`);
+      } else {
+        // Below $15 - doesn't count
+        console.log(`   ℹ️  First deposit $${firstDepositAmount} is below $15 - no milestone track`);
+      }
+    } else {
+      // Not first deposit - don't increment
+      console.log(`   ℹ️  Not first deposit (${depositCount} deposits) - milestone already counted`);
     }
-    // Deposits < $15 don't count in any track
-  });
-  
-  // Update counts
-  referrer.milestoneTracking.lowerTrack.count = lowerCount;
-  referrer.milestoneTracking.upperTrack.count = upperCount;
-  
-  await referrer.save();
-  
-  console.log(`   ✅ Updated milestone tracking for ${referrer.email}: Lower=${lowerCount}, Upper=${upperCount}`);
+  }
 };
 
 /**

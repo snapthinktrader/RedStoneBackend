@@ -1,4 +1,4 @@
-const { default: TronWeb } = require('tronweb');
+const TronWeb = require('tronweb');
 
 const tronWeb = new TronWeb({
   fullHost: 'https://api.trongrid.io',

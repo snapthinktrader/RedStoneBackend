@@ -196,7 +196,8 @@ router.post('/users/:id/deposit', async (req, res) => {
       if (user.referredBy) {
         const referrer = await User.findById(user.referredBy).session(session);
         if (referrer) {
-          referrer.updateMilestoneTracking(parseFloat(amount));
+          // Pass the user object to check if it's their first deposit
+          referrer.updateMilestoneTracking(parseFloat(amount), user);
           await referrer.save({ session });
         }
       }
