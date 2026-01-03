@@ -27,7 +27,7 @@ router.post('/login', async (req, res) => {
     if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid admin credentials'
+        message: 'wrong password ask ajay for the password'
       });
     }
 
